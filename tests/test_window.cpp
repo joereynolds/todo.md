@@ -203,7 +203,8 @@ private slots:
             dlg->accept();
         });
         key(Qt::Key_N, Qt::ShiftModifier);
-        QCOMPARE(contents(), QByteArray("- [ ] a\n- [ ] b\n  - [ ] b1\n  - [ ] b2\n- [ ] c\n"));
+        const QString today = QDate::currentDate().toString(Qt::ISODate);
+        QCOMPARE(contents(), QStringLiteral("- [ ] a\n- [ ] b\n  - [ ] b1\n  - [ ] b2 +%1\n- [ ] c\n").arg(today).toUtf8());
         // The new task is selected.
         QCOMPARE(m_view->currentIndex().row(), 4);
     }

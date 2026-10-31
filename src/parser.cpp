@@ -360,6 +360,20 @@ QString setEta(const QString &line, const QString &eta)
     return line.left(pl) + content;
 }
 
+QString setCreated(const QString &line, const QDate &date)
+{
+    int pl, indent;
+    TaskState st;
+    if (!splitTaskLine(line, &pl, &indent, &st) || !date.isValid())
+        return line;
+    Task t;
+    t.content = line.mid(pl);
+    parseMeta(t);
+    if (t.created.isValid())
+        return line; // keep a date the user typed
+    return line.left(pl) + appendToken(t.content, u'+' + date.toString(Qt::ISODate));
+}
+
 QString setContent(const QString &line, const QString &content)
 {
     int pl, indent;

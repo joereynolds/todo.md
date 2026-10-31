@@ -97,6 +97,8 @@ private slots:
         QCOMPARE(parser::setDue("- [ ] a !2026-01-01 b", QDate(2026, 2, 2)), QString("- [ ] a b !2026-02-02"));
         QCOMPARE(parser::setDue("- [ ] !2026-01-01 a", QDate()), QString("- [ ] a"));
         QCOMPARE(parser::setContent("\t* [/] old", "new"), QString("\t* [/] new"));
+        QCOMPARE(parser::setCreated("  - [ ] new !2026-11-02", today), QString("  - [ ] new !2026-11-02 +2026-10-31"));
+        QCOMPARE(parser::setCreated("- [ ] typed +2026-01-01", today), QString("- [ ] typed +2026-01-01"));
     }
 
     void applyAndUndo()

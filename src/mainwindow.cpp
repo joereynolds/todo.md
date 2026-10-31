@@ -804,7 +804,7 @@ void MainWindow::addTask(bool subtask)
     e.path = file->path;
     if (!anchorTask) {
         e.line = -1; // append to the end of the file
-        e.after = {QStringLiteral("- [ ] ") + text};
+        e.after = {parser::setCreated(QStringLiteral("- [ ] ") + text, QDate::currentDate())};
         const QString path = file->path;
         runEdits({e}, tr("Add task"), std::vector<LineKey>{});
         if (TaskFile *f = m_store->fileByPath(path); f && !f->tasks.empty()) {
@@ -823,7 +823,7 @@ void MainWindow::addTask(bool subtask)
     const Task *after = lastDescendant(anchorTask);
     e.line = after->line;
     e.before = {after->raw()};
-    e.after = {after->raw(), indent + bullet + QStringLiteral(" [ ] ") + text};
+    e.after = {after->raw(), parser::setCreated(indent + bullet + QStringLiteral(" [ ] ") + text, QDate::currentDate())};
     runEdits({e}, subtask ? tr("Add subtask") : tr("Add task"),
              std::vector<LineKey>{{file->path, after->line + 1}});
 }

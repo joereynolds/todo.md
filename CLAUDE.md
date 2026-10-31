@@ -26,6 +26,11 @@ QT_QPA_PLATFORM=offscreen ./build/todomd --screenshot out.png [--tab agenda] [--
 # XDG_CONFIG_HOME=/some/dir, and put a todomd/todomd.conf there to set filters.
 ```
 
+CI: `.github/workflows/tests.yml` builds and runs ctest on ubuntu-24.04 with Qt 6.8 LTS
+from `jurplel/install-qt-action` (Ubuntu's packaged Qt 6.4 is below the 6.5 minimum).
+Development happens on Qt 6.11, so avoid APIs newer than 6.8, or guard them with
+`QT_VERSION_CHECK`.
+
 Perf baseline (200k tasks / 5,000 files, generated corpus, every row visible):
 scan+parse ≈ 50 ms, first paint ≈ 120 ms total (the list, the agenda with subtasks, and
 the sidebar all build up front). A filter change takes 10–70 ms (the
@@ -79,6 +84,8 @@ models, window) → `todomd` (just `main.cpp`). The tests link the libraries.
 - Undo stores the inverse edits computed by `applyEdits`. At the same line number,
   line-consuming edits apply before insertions, and insertions keep list order. That
   rule is what makes undo of multi-line deletes and inserts exact (see `test_core`).
+- New tasks (add task / subtask) get `+<today>` via `parser::setCreated`, unless the
+  typed text already has a `+date`.
 - `setState` adds `x<today>` / `-<today>` when marking done/cancelled and removes
   both when moving back to todo/doing. It leaves the line untouched if the state
   doesn't change, so an existing completion date is kept.
