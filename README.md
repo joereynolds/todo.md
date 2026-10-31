@@ -2,6 +2,8 @@
 
 A GUI frontend to interface with markdown tasks.
 
+There is a mobile app for it [here](https://github.com/joereynolds/todo.md.app)
+
 <img width="1273" height="614" alt="image" src="https://github.com/user-attachments/assets/6c5c0fcd-daff-4826-a24d-059e737b5ad3" />
 
 <img width="1271" height="427" alt="image" src="https://github.com/user-attachments/assets/c742629e-5e7e-49b6-8e8b-9e1c26548c8c" />
