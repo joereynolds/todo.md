@@ -214,13 +214,16 @@ day in the sidebar read "174 days overdue".
 - Shortcuts: Space toggle done · X done · P in progress · T todo · C cancelled ·
   D due date · Shift+D clear due · ~ set ETA (number + unit dialog) · Ctrl+B sidebar · F2/double-click edit (multi-select →
   replace dialog) · Ctrl+H find/replace · N add task below · Shift+N add subtask · Del delete ·
-  E open in `$EDITOR` · Ctrl+F or / filter (Esc clears, ↓ back to list) ·
+  E open in `$EDITOR` · Ctrl+C copy as list · Ctrl+F or / filter (Esc clears, ↓ back to list) ·
   Alt+1..4 show todo/doing/done/cancelled · Ctrl+1/2 tabs · ←/→ collapse/expand ·
   Ctrl+. expand all · Ctrl+, collapse all groups (current tab) · Ctrl+Z / Ctrl+Shift+Z undo/redo ·
   Ctrl+O add directory · F5 reload.
   Single-key shortcuts are window-wide. `QLineEdit` eats printable keys via
   ShortcutOverride, so typing in the filter or the inline editor is safe. `~` is bound
   with and without Shift, because layouts differ.
+- Copy as list (Ctrl+C, context menu): selected tasks + subtasks as `- text` lines, indented
+  per selected ancestor (`tasksAsBulletList`). Subtasks the filter hides are left out; tasks
+  you explicitly selected never are.
 - Open in editor: `$EDITOR`, then `$VISUAL`, else `QDesktopServices`. Terminal editors
   (vim/nvim/nano/hx/…) run inside `$TERMINAL`, or the first installed of kitty, alacritty,
   wezterm, foot, ghostty, konsole, gnome-terminal, xfce4-terminal, … The user is on i3 with

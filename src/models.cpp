@@ -171,6 +171,19 @@ bool TaskFilter::matches(const Task &t) const
     return true;
 }
 
+QString tasksAsBulletList(const std::vector<Task *> &tasks)
+{
+    const QSet<const Task *> in(tasks.begin(), tasks.end());
+    QString out;
+    for (const Task *t : tasks) {
+        int level = 0;
+        for (const Task *a = t->parent; a; a = a->parent)
+            level += in.contains(a) ? 1 : 0;
+        out += QString(level * 2, u' ') + QStringLiteral("- ") + (t->text.isEmpty() ? t->content : t->text) + u'\n';
+    }
+    return out;
+}
+
 // ---------------------------------------------------------------- base
 
 TaskModelBase::TaskModelBase(TaskStore *store, QObject *parent)

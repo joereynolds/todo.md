@@ -345,6 +345,19 @@ private slots:
         QCOMPARE(read(path("a.md")), before);
     }
 
+    void bulletList()
+    {
+        auto f = parser::parse("/l.md", "l.md",
+                               "- [ ] Plan trip !2026-12-01 ~2h #travel\n  - [x] Book flights x2026-11-01\n"
+                               "    - [ ] Seats\n- [ ] Other\n");
+        auto &t = f->tasks;
+        QCOMPARE(tasksAsBulletList({&t[0], &t[1], &t[2], &t[3]}),
+                 QString("- Plan trip\n  - Book flights\n    - Seats\n- Other\n"));
+        // Indentation is relative to what's in the list.
+        QCOMPARE(tasksAsBulletList({&t[0], &t[2]}), QString("- Plan trip\n  - Seats\n"));
+        QCOMPARE(tasksAsBulletList({&t[2], &t[3]}), QString("- Seats\n- Other\n"));
+    }
+
     void appendCreatesFile()
     {
         const QString p = path("todo.md");

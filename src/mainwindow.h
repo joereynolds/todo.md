@@ -81,6 +81,7 @@ private:
     void editText();
     void replaceText();
     void addTask(bool subtask);
+    void copyAsList();
     QString defaultTaskFile() const; // todo.md in the first directory (may not exist yet)
     static QString newTaskLine(QString text, const QString &lead, const QDate &due);
     void appendTask(const QString &text, const QString &path, const QDate &due, bool select);
@@ -120,6 +121,7 @@ private:
     QAction *m_todo, *m_doing, *m_done, *m_cancel, *m_toggle;
     QAction *m_due, *m_clearDue, *m_eta, *m_edit, *m_replace, *m_add, *m_addSub, *m_delete;
     QAction *m_openEditor;
+    QAction *m_copyList;
     QAction *m_showState[4];
     QAction *m_focusFilter, *m_focusFilter2, *m_tasksTab, *m_agendaTab, *m_expandAll, *m_collapseAll, *m_toggleSidebar;
     QActionGroup *m_themeGroup;

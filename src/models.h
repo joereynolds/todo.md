@@ -50,6 +50,11 @@ private:
     QDate m_today;
 };
 
+// Tasks as a plain bulleted list for sharing: "- text" per task (display text, so
+// dates, ETAs and trailing tags are left out), each indented two spaces per
+// ancestor that is also in the list. `tasks` is in display order.
+QString tasksAsBulletList(const std::vector<Task *> &tasks);
+
 // Colours that depend on the palette (and so on the theme).
 struct TaskColors {
     bool dark = false;
@@ -116,6 +121,7 @@ public:
     explicit FlatTaskModel(TaskStore *store, QObject *parent = nullptr);
 
     TaskFilter &filter() { return m_filter; }
+    const TaskFilter &filter() const { return m_filter; }
     void refilter(); // call after changing filter()
 
     void setExpanded(int row, bool expanded);

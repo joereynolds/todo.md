@@ -10,6 +10,7 @@
 #include <QAbstractButton>
 #include <QAbstractItemModel>
 #include <QApplication>
+#include <QClipboard>
 #include <QComboBox>
 #include <QDialog>
 #include <QDialogButtonBox>
@@ -210,6 +211,14 @@ private slots:
         QCOMPARE(contents(), QStringLiteral("- [ ] a\n- [ ] b\n  - [ ] b1\n  - [ ] b2 +%1\n- [ ] c\n").arg(today).toUtf8());
         // The new task is selected.
         QCOMPARE(m_view->currentIndex().row(), 4);
+    }
+
+    void copyAsList()
+    {
+        select(2); // b, with subtasks b1 and b2 (added above)
+        QApplication::clipboard()->clear();
+        key(Qt::Key_C, Qt::ControlModifier);
+        QCOMPARE(QApplication::clipboard()->text(), QString("- b\n  - b1\n  - b2\n"));
     }
 
     void directoriesRemembered()

@@ -13,6 +13,7 @@
 #include <QActionGroup>
 #include <QApplication>
 #include <QCheckBox>
+#include <QClipboard>
 #include <QCloseEvent>
 #include <QComboBox>
 #include <QDesktopServices>
@@ -243,6 +244,8 @@ void MainWindow::buildActions()
     m_addSub = make(tr("Add &subtask…"), QKeySequence(Qt::SHIFT | Qt::Key_N), [this] { addTask(true); });
     m_delete = make(tr("De&lete…"), QKeySequence::Delete, [this] { deleteTasks(); });
     m_openEditor = make(tr("Open in edi&tor ($EDITOR)"), QKeySequence(Qt::Key_E), [this] { openInEditor(); });
+    m_copyList = make(tr("&Copy as list"), QKeySequence::Copy, [this] { copyAsList(); });
+    m_copyList->setToolTip(tr("Copy the selected tasks and their subtasks as a bulleted list"));
 
     QSettings s;
     static const char *names[] = {"Todo", "Doing", "Done", "Cancelled"};
@@ -353,7 +356,7 @@ void MainWindow::buildUi()
     edit->addSeparator();
     edit->addActions({m_edit, m_replace, m_add, m_addSub, m_delete});
     edit->addSeparator();
-    edit->addAction(m_openEditor);
+    edit->addActions({m_copyList, m_openEditor});
 
     QMenu *view = menuBar()->addMenu(tr("&View"));
     view->addActions({m_toggleSidebar, m_tasksTab, m_agendaTab});
@@ -604,6 +607,29 @@ std::vector<Task *> MainWindow::selectedTasks(bool withSubtasks) const
             add(t);
     }
     return out;
+}
+
+void MainWindow::copyAsList()
+{
+    // Selected tasks with their subtasks, minus subtasks the filter hides
+    // (e.g. done ones), so what's copied matches what's on screen.
+    const TaskFilter &filter = static_cast<const FlatTaskModel *>(current().model)->filter();
+    std::function<bool(const Task *)> shown = [&](const Task *t) {
+        return filter.matches(*t) || std::any_of(t->children.begin(), t->children.end(), shown);
+    };
+    const auto selected = selectedTasks(false);
+    const QSet<const Task *> picked(selected.begin(), selected.end());
+    std::vector<Task *> tasks;
+    for (Task *t : selectedTasks(true)) {
+        if (picked.contains(t) || shown(t))
+            tasks.push_back(t);
+    }
+    if (tasks.empty()) {
+        statusBar()->showMessage(tr("Select tasks to copy"), 3000);
+        return;
+    }
+    QApplication::clipboard()->setText(tasksAsBulletList(tasks));
+    statusBar()->showMessage(tr("Copied %n task(s)", nullptr, int(tasks.size())), 3000);
 }
 
 TaskFile *MainWindow::selectedFile() const
@@ -992,6 +1018,6 @@ void MainWindow::showContextMenu(const QPoint &pos)
     menu.addSeparator();
     menu.addActions({m_edit, m_replace, m_add, m_addSub, m_delete});
     menu.addSeparator();
-    menu.addAction(m_openEditor);
+    menu.addActions({m_copyList, m_openEditor});
     menu.exec(v->viewport()->mapToGlobal(pos));
 }
