@@ -164,6 +164,24 @@ private slots:
         QCOMPARE(parser::setEta("- [ ] ~2m a", ""), QString("- [ ] a"));
     }
 
+    void tags()
+    {
+        auto f = parser::parse("/a.md", "a.md",
+                               "- [ ] Do the thing at work #office\n"
+                               "- [ ] Call #mum about #dinner, then #Home/kitchen #home/kitchen ~5m\n"
+                               "- [ ] issue #123 and C# and # heading and #a#b\n"
+                               "- [ ] #only\n");
+        QCOMPARE(f->tasks[0].tags, QStringList({"office"}));
+        QCOMPARE(f->tasks[0].text, QString("Do the thing at work")); // trailing tags are hidden
+        QCOMPARE(f->tasks[1].tags, QStringList({"mum", "dinner", "Home/kitchen"}));
+        QCOMPARE(f->tasks[1].text, QString("Call #mum about #dinner, then")); // inline ones stay
+        QCOMPARE(f->tasks[2].tags, QStringList({"a"}));
+        QCOMPARE(f->tasks[2].text, QString("issue #123 and C# and # heading and #a#b"));
+        QCOMPARE(f->tasks[3].tags, QStringList({"only"}));
+        QCOMPARE(f->tasks[3].text, QString());
+        QCOMPARE(f->tasks[3].content, QString("#only"));
+    }
+
     void depth()
     {
         auto f = parser::parse("/a.md", "a.md", "- [ ] a\n  - [ ] b\n    - [ ] c\n  - [ ] d\n- [ ] e\n");

@@ -17,6 +17,7 @@ class TaskStore;
 //   ~<=15m ~<1h ~>2h ~>=1d ~30m ~none ~any       ETA conditions
 //   due:overdue due:today due:week due:none due:any   (week = next 7 days)
 //   is:todo is:doing is:done is:cancelled is:open
+//   #tag            it or an ancestor has the tag, or one nested under it (#work matches #work/meeting)
 class TaskFilter
 {
 public:
@@ -41,6 +42,7 @@ public:
 private:
     enum class Due { Overdue, Today, Week, None, Any };
     QStringList m_terms;
+    QStringList m_tags; // lower case, without '#'
     std::vector<EtaCond> m_textConds, m_presetConds;
     std::vector<Due> m_due;
     unsigned m_isMask = 0; // from is: terms, 0 = no constraint
@@ -68,6 +70,7 @@ public:
         HeaderRole,                   // bool; file and day header rows
         HasChildrenRole,              // bool; row can be expanded/collapsed
         ExpandedRole,                 // bool
+        TagsRole,                     // QStringList (without '#'), on tag cells of task rows
     };
 
     explicit TaskModelBase(TaskStore *store, QObject *parent = nullptr);
@@ -90,6 +93,7 @@ protected:
     QVariant taskData(const Task *t, int role) const;
     QVariant dueData(const Task *t, int role) const;
     QVariant etaData(const Task *t, int role) const;
+    QVariant tagsData(const Task *t, int role) const;
 
     TaskStore *m_store;
     QFont m_bold, m_strike, m_strikeItalic;
@@ -181,7 +185,7 @@ class TaskListModel : public FlatTaskModel
 {
     Q_OBJECT
 public:
-    enum Column { TextColumn, EtaColumn, DueColumn, ColumnCount };
+    enum Column { TextColumn, TagsColumn, EtaColumn, DueColumn, ColumnCount };
 
     explicit TaskListModel(TaskStore *store, QObject *parent = nullptr);
 
@@ -207,7 +211,7 @@ class AgendaModel : public FlatTaskModel
 {
     Q_OBJECT
 public:
-    enum Column { TextColumn, EtaColumn, FileColumn, ColumnCount };
+    enum Column { TextColumn, TagsColumn, EtaColumn, ColumnCount };
 
     explicit AgendaModel(TaskStore *store, QObject *parent = nullptr);
 

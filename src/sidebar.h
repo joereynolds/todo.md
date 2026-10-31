@@ -10,6 +10,7 @@
 
 class AgendaModel;
 class QLabel;
+class QLineEdit;
 class StatButton;
 class TaskStore;
 class TaskView;
@@ -46,18 +47,25 @@ public:
     void setStateVisible(TaskState state, bool visible);
     void refreshColors();
     void showDay(const QDate &day);
+    QLineEdit *addBox() const { return m_add; }
 
 signals:
     void filterRequested(const QString &text); // empty = clear
     void taskActivated(Task *task);            // double-click: show it in the task list
     void toggleRequested(Task *task);          // checkbox click
+    // Enter in the add box: a new task due `day`, after `after` (the selected
+    // task in the day list) or, when that is null, in the default file.
+    void addRequested(const QString &text, const QDate &day, Task *after);
 
 private:
     void refresh();
+    void updateAddHint();
+    Task *selectedDayTask() const;
 
     TaskStore *m_store;
     TaskCalendar *m_calendar;
     AgendaModel *m_dayModel;
     TaskView *m_dayView;
+    QLineEdit *m_add;
     std::vector<StatButton *> m_stats;
 };

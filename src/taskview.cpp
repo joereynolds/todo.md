@@ -98,6 +98,37 @@ TaskDelegate::Layout TaskDelegate::layoutFor(const QRect &cell, const QModelInde
     return l;
 }
 
+QFont TaskDelegate::smallFont(const QFont &font)
+{
+    QFont f = font;
+    if (font.pointSizeF() > 0)
+        f.setPointSizeF(font.pointSizeF() * 0.88);
+    else
+        f.setPixelSize(std::max(8, int(font.pixelSize() * 0.88)));
+    f.setBold(false);
+    f.setStrikeOut(false);
+    f.setItalic(false);
+    return f;
+}
+
+std::vector<QRect> TaskDelegate::tagRects(const QRect &cell, const QStringList &tags, const QFont &font)
+{
+    const QFontMetrics fm(smallFont(font));
+    const int h = fm.height() + 3;
+    const int top = cell.top() + (cell.height() - h) / 2;
+    const int right = cell.right() - kPad;
+    std::vector<QRect> out;
+    int x = cell.left() + kPad;
+    for (const QString &tag : tags) {
+        const int w = fm.horizontalAdvance(u'#' + tag) + 12;
+        if (x + w > right + 1)
+            break;
+        out.emplace_back(x, top, w, h);
+        x += w + 4;
+    }
+    return out;
+}
+
 void TaskDelegate::paint(QPainter *p, const QStyleOptionViewItem &option, const QModelIndex &index) const
 {
     const bool header = index.data(TaskModelBase::HeaderRole).toBool();
@@ -106,6 +137,40 @@ void TaskDelegate::paint(QPainter *p, const QStyleOptionViewItem &option, const 
     if (header && !selected)
         p->fillRect(option.rect, colors.band);
 
+    if (const QVariant tagsVar = index.data(TaskModelBase::TagsRole); tagsVar.isValid()) {
+        QStyleOptionViewItem opt(option);
+        initStyleOption(&opt, index);
+        const QWidget *w = option.widget;
+        (w ? w->style() : QApplication::style())->drawPrimitive(QStyle::PE_PanelItemViewItem, &opt, p, w);
+        const QStringList tags = tagsVar.toStringList();
+        const std::vector<QRect> rects = tagRects(option.rect, tags, option.font);
+        p->save();
+        p->setRenderHint(QPainter::Antialiasing);
+        p->setFont(smallFont(option.font));
+        QColor fill = colors.pill, ink = colors.pillText;
+        if (selected) {
+            fill = opt.palette.color(QPalette::HighlightedText);
+            fill.setAlphaF(0.22f);
+            ink = opt.palette.color(QPalette::HighlightedText);
+        }
+        for (size_t i = 0; i < rects.size(); ++i) {
+            const QRectF r = QRectF(rects[i]).adjusted(0.5, 0.5, -0.5, -0.5);
+            p->setPen(Qt::NoPen);
+            p->setBrush(fill);
+            p->drawRoundedRect(r, r.height() / 2, r.height() / 2);
+            p->setPen(ink);
+            p->drawText(r, Qt::AlignCenter, u'#' + tags[int(i)]);
+        }
+        if (rects.size() < size_t(tags.size())) {
+            const QRect last = rects.empty() ? option.rect.adjusted(kPad, 0, 0, 0) : rects.back();
+            const QRect more(last.right() + (rects.empty() ? 0 : 4), option.rect.top(),
+                             option.rect.right() - last.right(), option.rect.height());
+            p->setPen(selected ? ink : colors.dim);
+            p->drawText(more, Qt::AlignVCenter | Qt::AlignLeft, QStringLiteral("+%1").arg(tags.size() - int(rects.size())));
+        }
+        p->restore();
+        return;
+    }
     if (index.column() != 0) {
         QStyledItemDelegate::paint(p, option, index);
         return;
@@ -150,14 +215,8 @@ void TaskDelegate::paint(QPainter *p, const QStyleOptionViewItem &option, const 
         if (total > 0)
             pill = QStringLiteral("%1/%2").arg(done).arg(total);
     }
-    QFont pillFont = option.font;
-    if (option.font.pointSizeF() > 0)
-        pillFont.setPointSizeF(option.font.pointSizeF() * 0.88);
-    else
-        pillFont.setPixelSize(std::max(8, int(option.font.pixelSize() * 0.88)));
+    QFont pillFont = smallFont(option.font);
     pillFont.setBold(true);
-    pillFont.setStrikeOut(false);
-    pillFont.setItalic(false);
     const QFontMetrics pfm(pillFont);
     const int pillW = pill.isEmpty() ? 0 : pfm.horizontalAdvance(pill) + 14;
 
@@ -252,10 +311,25 @@ FlatTaskModel *TaskView::listModel() const
     return m_tree ? qobject_cast<FlatTaskModel *>(model()) : nullptr;
 }
 
-TaskView::Hit TaskView::hitTest(const QPoint &pos, QModelIndex *out) const
+TaskView::Hit TaskView::hitTest(const QPoint &pos, QModelIndex *out, QString *tag) const
 {
     const QModelIndex index = indexAt(pos);
-    if (!index.isValid() || index.column() != 0)
+    if (!index.isValid())
+        return Hit::None;
+    if (const QVariant tags = index.data(TaskModelBase::TagsRole); tags.isValid()) {
+        const QStringList list = tags.toStringList();
+        const std::vector<QRect> rects = TaskDelegate::tagRects(visualRect(index), list, font());
+        for (size_t i = 0; i < rects.size(); ++i) {
+            if (rects[i].contains(pos)) {
+                *out = index;
+                if (tag)
+                    *tag = list[int(i)];
+                return Hit::Tag;
+            }
+        }
+        return Hit::None;
+    }
+    if (index.column() != 0)
         return Hit::None;
     const TaskDelegate::Layout l = TaskDelegate::layoutFor(visualRect(index), index, m_tree);
     *out = index;
@@ -269,7 +343,11 @@ TaskView::Hit TaskView::hitTest(const QPoint &pos, QModelIndex *out) const
 bool TaskView::handleHit(const QPoint &pos)
 {
     QModelIndex index;
-    switch (hitTest(pos, &index)) {
+    QString tag;
+    switch (hitTest(pos, &index, &tag)) {
+    case Hit::Tag:
+        emit tagClicked(tag);
+        return true;
     case Hit::Arrow:
         if (FlatTaskModel *m = listModel())
             m->setExpanded(index.row(), !index.data(TaskModelBase::ExpandedRole).toBool());

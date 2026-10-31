@@ -20,7 +20,12 @@ bool splitTaskLine(QStringView line, int *prefixLen, int *indent, TaskState *sta
 // "90m", "2h", "7d", "5w", "85y" -> minutes; -1 if not an ETA.
 qint64 parseEta(QStringView text);
 
-// Fills text, dates and ETA from task.content.
+// "#work", "#work/meeting," -> "work", "work/meeting"; empty if not a tag. A tag is
+// '#' followed by letters, digits, '_', '-' or '/', not all digits; anything after
+// that (punctuation) is ignored.
+QStringView tagOf(QStringView token);
+
+// Fills text, dates, ETA and tags from task.content.
 void parseMeta(Task &task);
 
 std::unique_ptr<TaskFile> parse(const QString &path, const QString &relPath, const QByteArray &data);

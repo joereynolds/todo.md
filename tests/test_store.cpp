@@ -288,6 +288,38 @@ private slots:
         QVERIFY(f.narrows());
     }
 
+    void tagTerms()
+    {
+        auto f = parser::parse("/t.md", "t.md",
+                               "- [ ] a #work\n- [ ] b #work/meeting\n- [ ] c #workshop\n- [ ] d #Home #work\n");
+        auto names = [&](const QString &text) {
+            TaskFilter filter;
+            filter.setText(text);
+            QStringList out;
+            for (const Task &t : f->tasks) {
+                if (filter.matches(t))
+                    out << t.text;
+            }
+            return out;
+        };
+        QCOMPARE(names("#work"), QStringList({"a", "b", "d"})); // nested tags match, prefixes don't
+        QCOMPARE(names("#WORK/meeting"), QStringList({"b"}));
+        QCOMPARE(names("#home #work"), QStringList({"d"}));
+        QCOMPARE(names("#nope"), QStringList());
+
+        // Subtasks inherit their ancestors' tags.
+        auto g = parser::parse("/u.md", "u.md", "- [ ] p #work\n  - [ ] c\n    - [ ] gc #home\n- [ ] q\n");
+        TaskFilter work, home;
+        work.setText("#work");
+        home.setText("#work #home");
+        QVERIFY(work.matches(g->tasks[0]) && work.matches(g->tasks[1]) && work.matches(g->tasks[2]));
+        QVERIFY(!work.matches(g->tasks[3]));
+        QVERIFY(!home.matches(g->tasks[1]) && home.matches(g->tasks[2]));
+        TaskFilter plain;
+        plain.setText("#work");
+        QVERIFY(plain.narrows());
+    }
+
     void bulkEditUndoRedo()
     {
         const QByteArray before = read(path("a.md"));
@@ -311,6 +343,28 @@ private slots:
         QCOMPARE(m_store->taskAt(path("sub/b.md"), 0)->state, TaskState::Done);
         m_store->undo();
         QCOMPARE(read(path("a.md")), before);
+    }
+
+    void appendCreatesFile()
+    {
+        const QString p = path("todo.md");
+        QVERIFY(!QFile::exists(p));
+        const size_t files = m_store->files().size();
+        // Only an append may create a file; a replace into a missing file is an error.
+        QCOMPARE(m_store->apply({{path("missing.md"), 0, {"x"}, {"y"}}}, "bad"), 0);
+        QVERIFY(!QFile::exists(path("missing.md")));
+        QCOMPARE(m_store->apply({{p, -1, {}, {"- [ ] new"}}}, "add"), 1);
+        QCOMPARE(read(p), QByteArray("- [ ] new\n"));
+        QCOMPARE(m_store->files().size(), files + 1);
+        QVERIFY(m_store->taskAt(p, 0));
+        QTest::qWait(300); // the directory watcher must not load it a second time
+        QCOMPARE(m_store->files().size(), files + 1);
+        m_store->undo();
+        QCOMPARE(read(p), QByteArray());
+        QCOMPARE(m_store->files().size(), files);
+        QVERIFY(QFile::remove(p));
+        QTest::qWait(300);
+        QCOMPARE(m_store->files().size(), files);
     }
 
     void conflictIsSkipped()

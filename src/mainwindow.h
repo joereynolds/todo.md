@@ -81,10 +81,15 @@ private:
     void editText();
     void replaceText();
     void addTask(bool subtask);
+    QString defaultTaskFile() const; // todo.md in the first directory (may not exist yet)
+    static QString newTaskLine(QString text, const QString &lead, const QDate &due);
+    void appendTask(const QString &text, const QString &path, const QDate &due, bool select);
+    void insertTask(const QString &text, Task *anchor, bool subtask, const QDate &due, bool select);
     void deleteTasks();
     void openInEditor();
 
     void applyFilter();
+    void setFilterText(const QString &text); // sets the box and applies at once
     void forEachFilter(const std::function<void(TaskFilter &)> &fn);
     void applyTheme(const QString &name);
     void updateStatus();

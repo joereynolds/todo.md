@@ -61,3 +61,18 @@ h - hours
 d - days
 w - weeks
 y - years
+
+## Tags
+
+Tasks can be tagged anywhere inside them with `#tag`
+
+```
+- [ ] Do the thing at work #office
+- [ ] Call #mum about dinner #family
+- [ ] Prepare the agenda #work/meeting
+```
+
+A tag is `#` followed by letters, digits, `_`, `-` or `/`, and can't be only
+digits (so `#123` is not a tag). Tags can be nested with `/`: filtering by
+`#work` also shows `#work/meeting`. Subtasks inherit the tags of the tasks
+they're nested under.

@@ -41,6 +41,7 @@ public:
     static QString normalizeRoot(const QString &dir);
 
     // Writes edits to disk, reloads the touched files and records an undo step.
+    // A missing file is created when every edit to it is an append (line -1).
     // Returns the number of edits applied.
     int apply(const std::vector<Edit> &edits, const QString &label);
 

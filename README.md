@@ -55,6 +55,8 @@ A few examples
 - [-] A task cancelled on boxing day -2026-12-26
 - [ ] A bigger job ~3d
 - [ ] An even bigger job ~2w
+- [ ] Do the thing at work #office
+- [ ] Call #mum about dinner #family
 ```
 
 It also supports subtasks. Subtasks are just arbitrarily nested tasks.

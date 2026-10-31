@@ -18,6 +18,7 @@
 #include <QDesktopServices>
 #include <QDir>
 #include <QFileDialog>
+#include <QFileInfo>
 #include <QHBoxLayout>
 #include <QHeaderView>
 #include <QInputDialog>
@@ -308,6 +309,11 @@ QTreeView *MainWindow::makeView(bool tree)
         if (Task *t = p.model->taskAt(index))
             toggleTask(t);
     });
+    connect(v, &TaskView::tagClicked, this, [this](const QString &tag) {
+        // Show everything with the tag; clicking the same tag again clears it.
+        const QString term = u'#' + tag;
+        setFilterText(m_filter->text().trimmed().compare(term, Qt::CaseInsensitive) == 0 ? QString() : term);
+    });
     v->setUniformRowHeights(true); // large win for big lists
     v->setSelectionMode(QAbstractItemView::ExtendedSelection); // click-drag, shift, ctrl
     v->setSelectionBehavior(QAbstractItemView::SelectRows);
@@ -372,7 +378,8 @@ void MainWindow::buildUi()
     m_filter->setToolTip(tr("Space separated terms, all must match.\n"
                             "ETA: ~<=15m  ~<1h  ~>2h  ~>=1d  ~30m  ~none  ~any\n"
                             "Due: due:overdue  due:today  due:week  due:none  due:any\n"
-                            "State: is:todo  is:doing  is:done  is:cancelled  is:open"));
+                            "State: is:todo  is:doing  is:done  is:cancelled  is:open\n"
+                            "Tags: #work (also matches #work/meeting); click a tag to filter by it"));
     m_filter->setClearButtonEnabled(true);
     m_filter->setMinimumWidth(220);
     m_filter->installEventFilter(new FilterKeys(m_filter, [this] { return current().view; }));
@@ -395,9 +402,12 @@ void MainWindow::buildUi()
     m_list.view->setModel(m_listModel);
     const int dateWidth = fontMetrics().horizontalAdvance(QStringLiteral("0000-00-00")) + 24;
     const int etaWidth = fontMetrics().horizontalAdvance(QStringLiteral("ETA 999m")) + 12;
+    const int tagsWidth = fontMetrics().horizontalAdvance(QStringLiteral("#errands #someday")) + 32;
     QHeaderView *h = m_list.view->header();
     h->setStretchLastSection(false);
     h->setSectionResizeMode(TaskListModel::TextColumn, QHeaderView::Stretch);
+    h->setSectionResizeMode(TaskListModel::TagsColumn, QHeaderView::Interactive);
+    h->resizeSection(TaskListModel::TagsColumn, tagsWidth);
     h->setSectionResizeMode(TaskListModel::EtaColumn, QHeaderView::Fixed);
     h->setSectionResizeMode(TaskListModel::DueColumn, QHeaderView::Fixed);
     h->resizeSection(TaskListModel::EtaColumn, etaWidth);
@@ -409,10 +419,10 @@ void MainWindow::buildUi()
     h = m_agenda.view->header();
     h->setStretchLastSection(false);
     h->setSectionResizeMode(AgendaModel::TextColumn, QHeaderView::Stretch);
+    h->setSectionResizeMode(AgendaModel::TagsColumn, QHeaderView::Interactive);
+    h->resizeSection(AgendaModel::TagsColumn, tagsWidth);
     h->setSectionResizeMode(AgendaModel::EtaColumn, QHeaderView::Fixed);
-    h->setSectionResizeMode(AgendaModel::FileColumn, QHeaderView::Interactive);
     h->resizeSection(AgendaModel::EtaColumn, etaWidth);
-    h->resizeSection(AgendaModel::FileColumn, 200);
 
     auto *agendaPage = new QWidget(this);
     auto *agendaLayout = new QVBoxLayout(agendaPage);
@@ -459,12 +469,20 @@ void MainWindow::buildUi()
     });
     setCentralWidget(m_splitter);
 
-    connect(m_sidebar, &Sidebar::filterRequested, this, [this](const QString &text) {
-        m_filter->setText(text);
-        m_filterTimer.stop();
-        forEachFilter([&](TaskFilter &f) { f.setText(text); });
-    });
+    connect(m_sidebar, &Sidebar::filterRequested, this, &MainWindow::setFilterText);
     connect(m_sidebar, &Sidebar::toggleRequested, this, &MainWindow::toggleTask);
+    connect(m_sidebar, &Sidebar::addRequested, this, [this](const QString &text, const QDate &day, Task *after) {
+        if (after) {
+            insertTask(text, after, false, day, false);
+            return;
+        }
+        const QString path = defaultTaskFile();
+        if (path.isEmpty()) {
+            statusBar()->showMessage(tr("Add a directory first (Ctrl+O)"), 3000);
+            return;
+        }
+        appendTask(text, path, day, false);
+    });
     connect(m_sidebar, &Sidebar::taskActivated, this, [this](Task *t) {
         m_tabs->setCurrentIndex(0);
         const QModelIndex i = m_listModel->reveal(t);
@@ -540,6 +558,13 @@ void MainWindow::forEachFilter(const std::function<void(TaskFilter &)> &fn)
     fn(m_listModel->filter());
     fn(m_agendaModel->filter());
     applyFilter();
+}
+
+void MainWindow::setFilterText(const QString &text)
+{
+    m_filter->setText(text);
+    m_filterTimer.stop();
+    forEachFilter([&](TaskFilter &f) { f.setText(text); });
 }
 
 void MainWindow::applyFilter()
@@ -780,39 +805,74 @@ void MainWindow::replaceText()
     runEdits(edits, tr("Replace"));
 }
 
+QString MainWindow::defaultTaskFile() const
+{
+    // todo.md in the first directory that has one, else in the first directory.
+    const QStringList roots = m_store->roots();
+    for (const QString &r : roots) {
+        if (QFileInfo::exists(r + QStringLiteral("/todo.md")))
+            return r + QStringLiteral("/todo.md");
+    }
+    return roots.isEmpty() ? QString() : roots.first() + QStringLiteral("/todo.md");
+}
+
 void MainWindow::addTask(bool subtask)
 {
     const auto tasks = selectedTasks(false);
     Task *anchorTask = tasks.empty() ? nullptr : tasks.back();
     TaskFile *file = anchorTask ? anchorTask->file : selectedFile();
-    if (!file) {
-        statusBar()->showMessage(tr("Select a task or a file to add to"), 3000);
+    const QString path = file ? file->path : defaultTaskFile();
+    if (path.isEmpty()) {
+        statusBar()->showMessage(tr("Add a directory first (Ctrl+O)"), 3000);
         return;
     }
-    QString prompt = tr("New task in %1:").arg(file->relPath);
+    QString prompt = tr("New task in %1:").arg(file ? file->relPath : QStringLiteral("todo.md"));
     if (anchorTask)
         prompt = subtask ? tr("New subtask of \"%1\":").arg(anchorTask->text)
                          : tr("New task after \"%1\":").arg(anchorTask->text);
     bool ok = false;
-    QString text = QInputDialog::getText(this, subtask ? tr("Add subtask") : tr("Add task"), prompt,
-                                         QLineEdit::Normal, QString(), &ok);
-    text.replace(u'\n', u' ');
+    const QString text = QInputDialog::getText(this, subtask ? tr("Add subtask") : tr("Add task"), prompt,
+                                               QLineEdit::Normal, QString(), &ok);
     if (!ok || text.trimmed().isEmpty())
         return;
+    if (anchorTask)
+        insertTask(text, anchorTask, subtask, {}, true);
+    else
+        appendTask(text, path, {}, true);
+}
 
+QString MainWindow::newTaskLine(QString text, const QString &lead, const QDate &due)
+{
+    text.replace(u'\n', u' ');
+    QString line = lead + text;
+    Task typed;
+    typed.content = text;
+    parser::parseMeta(typed);
+    if (due.isValid() && !typed.due.isValid()) // a !date typed by hand wins
+        line = parser::setDue(line, due);
+    return parser::setCreated(line, QDate::currentDate());
+}
+
+void MainWindow::appendTask(const QString &text, const QString &path, const QDate &due, bool select)
+{
     Edit e;
-    e.path = file->path;
-    if (!anchorTask) {
-        e.line = -1; // append to the end of the file
-        e.after = {parser::setCreated(QStringLiteral("- [ ] ") + text, QDate::currentDate())};
-        const QString path = file->path;
-        runEdits({e}, tr("Add task"), std::vector<LineKey>{});
-        if (TaskFile *f = m_store->fileByPath(path); f && !f->tasks.empty()) {
-            const LineKey k{path, f->tasks.back().line};
-            restoreView(current(), {{k}, k, 0}, true);
-        }
+    e.path = path;
+    e.line = -1; // append to the end of the file (creating it if needed)
+    e.after = {newTaskLine(text, QStringLiteral("- [ ] "), due)};
+    if (!select) {
+        runEdits({e}, tr("Add task"));
         return;
     }
+    runEdits({e}, tr("Add task"), std::vector<LineKey>{});
+    if (TaskFile *f = m_store->fileByPath(path); f && !f->tasks.empty()) {
+        const LineKey k{path, f->tasks.back().line};
+        restoreView(current(), {{k}, k, 0}, true);
+    }
+}
+
+void MainWindow::insertTask(const QString &text, Task *anchorTask, bool subtask, const QDate &due, bool select)
+{
+    TaskFile *file = anchorTask->file;
     const QString lead = parser::leadingWhitespace(anchorTask->prefix);
     const QChar bullet = anchorTask->prefix[lead.size()];
     QString indent = lead;
@@ -821,11 +881,16 @@ void MainWindow::addTask(bool subtask)
                                               : parser::leadingWhitespace(anchorTask->children.front()->prefix);
     // After the anchor's last descendant, so it lands as a sibling or last child.
     const Task *after = lastDescendant(anchorTask);
+    Edit e;
+    e.path = file->path;
     e.line = after->line;
     e.before = {after->raw()};
-    e.after = {after->raw(), parser::setCreated(indent + bullet + QStringLiteral(" [ ] ") + text, QDate::currentDate())};
-    runEdits({e}, subtask ? tr("Add subtask") : tr("Add task"),
-             std::vector<LineKey>{{file->path, after->line + 1}});
+    e.after = {after->raw(), newTaskLine(text, indent + bullet + QStringLiteral(" [ ] "), due)};
+    const QString label = subtask ? tr("Add subtask") : tr("Add task");
+    if (select)
+        runEdits({e}, label, std::vector<LineKey>{{file->path, after->line + 1}});
+    else
+        runEdits({e}, label);
 }
 
 void MainWindow::deleteTasks()

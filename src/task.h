@@ -2,6 +2,7 @@
 
 #include <QDate>
 #include <QString>
+#include <QStringList>
 #include <Qt>
 
 #include <vector>
@@ -37,6 +38,7 @@ struct Task : Node {
     QDate due, created, completed, cancelled;
     qint64 eta = 0;  // estimate in minutes, 0 = none
     QString etaText; // as written, without the '~' (e.g. "90m")
+    QStringList tags; // "#work" -> "work", as written, in order, no duplicates (case-insensitive)
 
     int subDone = 0;  // completed descendants
     int subTotal = 0; // non-cancelled descendants

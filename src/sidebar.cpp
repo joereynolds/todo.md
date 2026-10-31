@@ -9,6 +9,7 @@
 #include <QHBoxLayout>
 #include <QHeaderView>
 #include <QLabel>
+#include <QLineEdit>
 #include <QPainter>
 #include <QPushButton>
 #include <QTextCharFormat>
@@ -22,18 +23,31 @@ public:
         : QAbstractButton(parent), m_label(label), m_filter(filter)
     {
         setCheckable(!filter.isEmpty());
-        setEnabled(!filter.isEmpty());
-        setCursor(filter.isEmpty() ? Qt::ArrowCursor : Qt::PointingHandCursor);
-        setToolTip(filter.isEmpty() ? QString() : tr("Filter: %1 (click again to clear)").arg(filter));
         setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
+        connect(this, &QAbstractButton::toggled, this, [this] { updateClickable(); });
+        updateClickable();
     }
 
     QString filter() const { return m_filter; }
     void setCount(int n)
     {
         m_count = n;
+        updateClickable();
         update();
     }
+
+private:
+    // Nothing to show at zero, so no click; an active filter stays clickable so
+    // it can still be cleared after its count drops to zero.
+    void updateClickable()
+    {
+        const bool on = !m_filter.isEmpty() && (m_count > 0 || isChecked());
+        setEnabled(on);
+        setCursor(on ? Qt::PointingHandCursor : Qt::ArrowCursor);
+        setToolTip(on ? tr("Filter: %1 (click again to clear)").arg(m_filter) : QString());
+    }
+
+public:
 
     QSize sizeHint() const override
     {
@@ -214,12 +228,18 @@ Sidebar::Sidebar(TaskStore *store, QWidget *parent) : QWidget(parent), m_store(s
     m_dayView->setUniformRowHeights(true);
     m_dayView->setEditTriggers(QAbstractItemView::NoEditTriggers);
     m_dayView->setSelectionMode(QAbstractItemView::SingleSelection);
-    m_dayView->hideColumn(AgendaModel::FileColumn);
+    m_dayView->hideColumn(AgendaModel::TagsColumn);
     m_dayView->header()->setStretchLastSection(false);
     m_dayView->header()->setSectionResizeMode(AgendaModel::TextColumn, QHeaderView::Stretch);
     m_dayView->header()->setSectionResizeMode(AgendaModel::EtaColumn, QHeaderView::ResizeToContents);
     m_dayView->setToolTip(tr("Double-click to show the task in the task list"));
     layout->addWidget(m_dayView, 1);
+
+    m_add = new QLineEdit(this);
+    m_add->setClearButtonEnabled(true);
+    m_add->setToolTip(tr("Type a task and press Enter to add it, due on the selected day.\n"
+                         "It goes after the task selected above, or else into todo.md."));
+    layout->addWidget(m_add);
 
     layout->addWidget(heading(tr("Filters")));
     layout->addLayout(grid);
@@ -234,8 +254,33 @@ Sidebar::Sidebar(TaskStore *store, QWidget *parent) : QWidget(parent), m_store(s
         if (Task *t = m_dayModel->taskAt(index))
             emit taskActivated(t);
     });
+    connect(m_add, &QLineEdit::returnPressed, this, [this] {
+        const QString text = m_add->text().simplified();
+        if (text.isEmpty())
+            return;
+        Task *after = selectedDayTask();
+        m_add->clear(); // before emitting: the add rebuilds the models
+        emit addRequested(text, m_dayModel->singleDay(), after);
+    });
+    connect(m_dayView->selectionModel(), &QItemSelectionModel::selectionChanged, this, &Sidebar::updateAddHint);
+    connect(m_dayModel, &QAbstractItemModel::modelReset, this, &Sidebar::updateAddHint);
     connect(store, &TaskStore::changed, this, &Sidebar::refresh);
     refresh();
+    updateAddHint();
+}
+
+Task *Sidebar::selectedDayTask() const
+{
+    const QModelIndexList rows = m_dayView->selectionModel()->selectedRows(0);
+    return rows.isEmpty() ? nullptr : m_dayModel->taskAt(rows.front());
+}
+
+void Sidebar::updateAddHint()
+{
+    const QString day = m_dayModel->singleDay().toString(QStringLiteral("ddd d MMM"));
+    const Task *after = selectedDayTask();
+    m_add->setPlaceholderText(after ? tr("+ Add for %1 (in %2)").arg(day, after->file->relPath)
+                                    : tr("+ Add for %1 (to todo.md)").arg(day));
 }
 
 void Sidebar::showDay(const QDate &day)

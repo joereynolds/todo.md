@@ -409,19 +409,26 @@ TaskStore::Outcome TaskStore::applyRaw(const std::vector<Edit> &edits)
     beginChange();
     for (const QString &path : order) {
         std::vector<Edit> &fileEdits = byFile[path];
+        LineBuffer buf;
         QFile in(path);
-        if (!in.open(QIODevice::ReadOnly)) {
+        const bool create = !QFileInfo::exists(path) && std::all_of(fileEdits.begin(), fileEdits.end(), [](const Edit &e) {
+            return e.line < 0 && e.before.isEmpty();
+        });
+        if (in.open(QIODevice::ReadOnly)) {
+            buf = LineBuffer::fromData(in.readAll());
+            in.close();
+        } else if (!create) { // only appends may create a missing file
             out.errors << path;
             continue;
         }
-        LineBuffer buf = LineBuffer::fromData(in.readAll());
-        in.close();
 
         ApplyResult r = applyEdits(buf, std::move(fileEdits));
         out.conflicts += r.conflicts;
         if (r.applied > 0) {
             QSaveFile file(path);
             if (file.open(QIODevice::WriteOnly) && file.write(buf.toData()) >= 0 && file.commit()) {
+                if (create)
+                    m_known.insert(path); // so the directory watcher doesn't load it twice
                 out.applied += r.applied;
                 out.inverse.insert(out.inverse.end(), r.inverse.begin(), r.inverse.end());
             } else {

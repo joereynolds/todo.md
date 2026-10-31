@@ -3,6 +3,7 @@
 #include <QFile>
 #include <QHash>
 
+#include <algorithm>
 #include <cstring>
 
 namespace parser {
@@ -106,6 +107,25 @@ QString appendToken(const QString &content, const QString &token)
 
 } // namespace
 
+QStringView tagOf(QStringView tok)
+{
+    if (tok.size() < 2 || tok[0] != u'#')
+        return {};
+    qsizetype i = 1;
+    bool digitsOnly = true;
+    for (; i < tok.size(); ++i) {
+        const QChar c = tok[i];
+        if (c.isDigit())
+            continue;
+        if (!c.isLetterOrNumber() && c != u'_' && c != u'-' && c != u'/')
+            break;
+        digitsOnly = false;
+    }
+    if (i == 1 || digitsOnly) // "#", "#123" (issue numbers aren't tags)
+        return {};
+    return tok.mid(1, i - 1);
+}
+
 qint64 parseEta(QStringView t)
 {
     // 1-9 digits followed by a unit.
@@ -169,6 +189,9 @@ void parseMeta(Task &t)
     const qsizetype n = c.size();
     QString text;
     text.reserve(n);
+    // Tags are kept in the text when words follow them ("Call #mum about it"),
+    // and dropped from it when they trail ("Do the thing #office").
+    QString pendingTags;
     for (qsizetype i = 0; i < n;) {
         while (i < n && isSpace(c[i]))
             ++i;
@@ -196,6 +219,25 @@ void parseMeta(Task &t)
             case '-': t.cancelled = d; break;
             }
             continue;
+        }
+        if (const QStringView tag = tagOf(tok); !tag.isEmpty()) {
+            const bool known = std::any_of(t.tags.cbegin(), t.tags.cend(), [&](const QString &x) {
+                return tag.compare(x, Qt::CaseInsensitive) == 0;
+            });
+            if (!known)
+                t.tags << tag.toString();
+            if (tag.size() + 1 == tok.size()) { // the whole token is the tag
+                if (!pendingTags.isEmpty())
+                    pendingTags += u' ';
+                pendingTags += tok;
+                continue;
+            }
+        }
+        if (!pendingTags.isEmpty()) {
+            if (!text.isEmpty())
+                text += u' ';
+            text += pendingTags;
+            pendingTags.clear();
         }
         if (!text.isEmpty())
             text += u' ';

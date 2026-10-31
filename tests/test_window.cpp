@@ -1,11 +1,13 @@
 // Drives the real window through its keyboard shortcuts.
 
 #include "mainwindow.h"
+#include "models.h"
 #include "store.h"
 #include "dialogs.h"
 #include "sidebar.h"
 #include "taskview.h"
 
+#include <QAbstractButton>
 #include <QAbstractItemModel>
 #include <QApplication>
 #include <QComboBox>
@@ -16,6 +18,7 @@
 #include <QDir>
 #include <QFile>
 #include <QInputDialog>
+#include <QLineEdit>
 #include <QSettings>
 #include <QSignalSpy>
 #include <QTemporaryDir>
@@ -212,6 +215,85 @@ private slots:
     void directoriesRemembered()
     {
         QCOMPARE(QSettings().value("directories").toStringList(), QStringList({QDir::cleanPath(m_dir.path())}));
+    }
+
+    // Rewrites the file, so it runs last.
+    void tagClick()
+    {
+        QSignalSpy changed(m_store, &TaskStore::changed);
+        QFile f(file());
+        QVERIFY(f.open(QIODevice::WriteOnly | QIODevice::Truncate));
+        f.write("- [ ] a #home\n- [ ] b #work\n  - [ ] b1 #work/x\n- [ ] c\n");
+        f.close();
+        QVERIFY(changed.wait(5000));
+        QCOMPARE(m_view->model()->rowCount(), 5);
+        QCOMPARE(m_view->model()->index(1, TaskListModel::TagsColumn).data().toString(), QString("#home"));
+
+        QLineEdit *filter = nullptr;
+        for (QLineEdit *e : m_window->findChildren<QLineEdit *>()) {
+            if (e->placeholderText().startsWith("Filter"))
+                filter = e;
+        }
+        QVERIFY(filter);
+        auto clickTag = [&](int row) {
+            const QModelIndex i = m_view->model()->index(row, TaskListModel::TagsColumn);
+            const auto rects = TaskDelegate::tagRects(m_view->visualRect(i), i.data(TaskModelBase::TagsRole).toStringList(),
+                                                      m_view->font());
+            QVERIFY(!rects.empty());
+            QTest::mouseClick(m_view->viewport(), Qt::LeftButton, {}, rects.front().center());
+        };
+        clickTag(2); // #work on b: b and its #work/x subtask
+        QCOMPARE(filter->text(), QString("#work"));
+        QCOMPARE(m_view->model()->rowCount(), 3);
+        clickTag(1); // the same tag again clears the filter
+        QCOMPARE(filter->text(), QString());
+        QCOMPARE(m_view->model()->rowCount(), 5);
+    }
+
+    // Creates todo.md, so it runs after the tests that count rows.
+    void sidebarAddForDay()
+    {
+        const QString todo = m_dir.path() + QStringLiteral("/todo.md");
+        QVERIFY(!QFile::exists(todo));
+        auto *sidebar = m_window->findChild<Sidebar *>();
+        QVERIFY(sidebar);
+        const QDate day = QDate::currentDate().addDays(3);
+        const QString today = QDate::currentDate().toString(Qt::ISODate), due = day.toString(Qt::ISODate);
+        sidebar->showDay(day);
+        QLineEdit *box = sidebar->addBox();
+        QVERIFY(box->placeholderText().contains("todo.md"));
+
+        // Nothing selected in the day list: into todo.md, which is created.
+        box->setText("buy milk");
+        QTest::keyClick(box, Qt::Key_Return);
+        QCOMPARE(box->text(), QString());
+        QFile f(todo);
+        QVERIFY(f.open(QIODevice::ReadOnly));
+        QCOMPARE(f.readAll(), QStringLiteral("- [ ] buy milk !%1 +%2\n").arg(due, today).toUtf8());
+        f.close();
+        QCOMPARE(sidebar->dayModel()->rowCount(), 2); // day header + the new task
+
+        // A task selected in the day list: the new one goes after it, in its file.
+        // A hand-typed due date wins over the selected day.
+        sidebar->dayView()->setCurrentIndex(sidebar->dayModel()->index(1, 0));
+        QVERIFY(box->placeholderText().contains("todo.md")); // "in todo.md"
+        box->setText("pay rent !2030-01-01");
+        QTest::keyClick(box, Qt::Key_Return);
+        box->setText("bin day");
+        sidebar->dayView()->setCurrentIndex(sidebar->dayModel()->index(1, 0));
+        QTest::keyClick(box, Qt::Key_Return);
+        QVERIFY(f.open(QIODevice::ReadOnly));
+        QCOMPARE(f.readAll(), QStringLiteral("- [ ] buy milk !%1 +%2\n- [ ] bin day !%1 +%2\n- [ ] pay rent !2030-01-01 +%2\n")
+                                  .arg(due, today)
+                                  .toUtf8());
+
+        // Only filter tiles with something to show are clickable: here just "next 7 days".
+        QStringList clickable;
+        for (QAbstractButton *b : sidebar->findChildren<QAbstractButton *>()) {
+            if (b->isCheckable() && b->isEnabled())
+                clickable << b->toolTip();
+        }
+        QCOMPARE(clickable, QStringList({"Filter: due:week (click again to clear)"}));
     }
 };
 

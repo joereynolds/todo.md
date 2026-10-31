@@ -64,6 +64,7 @@ bool TaskFilter::parseEtaCond(QStringView term, EtaCond *out)
 void TaskFilter::setText(const QString &text)
 {
     m_terms.clear();
+    m_tags.clear();
     m_textConds.clear();
     m_due.clear();
     m_isMask = 0;
@@ -75,6 +76,10 @@ void TaskFilter::setText(const QString &text)
             continue;
         }
         const QString lower = term.toLower();
+        if (const QStringView tag = parser::tagOf(lower); !tag.isEmpty() && tag.size() + 1 == lower.size()) {
+            m_tags << tag.toString();
+            continue;
+        }
         if (lower.startsWith(QLatin1String("due:"))) {
             static const std::pair<const char *, Due> dues[] = {
                 {"overdue", Due::Overdue}, {"today", Due::Today}, {"week", Due::Week},
@@ -115,7 +120,7 @@ void TaskFilter::setStateVisible(TaskState state, bool visible)
 
 bool TaskFilter::narrows() const
 {
-    return !m_terms.isEmpty() || !m_textConds.empty() || !m_presetConds.empty() || !m_due.empty() || m_isMask;
+    return !m_terms.isEmpty() || !m_tags.isEmpty() || !m_textConds.empty() || !m_presetConds.empty() || !m_due.empty() || m_isMask;
 }
 
 bool TaskFilter::showsEverything() const
@@ -146,6 +151,17 @@ bool TaskFilter::matches(const Task &t) const
         case Due::Any: ok = t.due.isValid(); break;
         }
         if (!ok)
+            return false;
+    }
+    for (const QString &tag : m_tags) {
+        // Subtasks inherit the tags of their ancestors.
+        bool has = false;
+        for (const Task *a = &t; a && !has; a = a->parent) {
+            has = std::any_of(a->tags.cbegin(), a->tags.cend(), [&](const QString &x) {
+                return x.startsWith(tag, Qt::CaseInsensitive) && (x.size() == tag.size() || x[tag.size()] == u'/');
+            });
+        }
+        if (!has)
             return false;
     }
     for (const QString &term : m_terms) {
@@ -293,6 +309,27 @@ QVariant TaskModelBase::etaData(const Task *t, int role) const
         return t->eta <= 2 ? QVariant(m_colors.quick) : QVariant(); // GTD: do it now
     case Qt::ToolTipRole:
         return t->eta <= 2 ? tr("Two minutes or less: do it now") : QVariant();
+    default:
+        return {};
+    }
+}
+
+QVariant TaskModelBase::tagsData(const Task *t, int role) const
+{
+    if (t->tags.isEmpty())
+        return {};
+    switch (role) {
+    case TagsRole:
+        return t->tags;
+    case Qt::DisplayRole:
+    case Qt::ToolTipRole: {
+        QString s;
+        for (const QString &tag : t->tags)
+            s += (s.isEmpty() ? QStringLiteral("#") : QStringLiteral(" #")) + tag;
+        if (role == Qt::ToolTipRole)
+            s += u'\n' + tr("Click a tag to show everything tagged with it");
+        return s;
+    }
     default:
         return {};
     }
@@ -631,6 +668,7 @@ QVariant TaskListModel::taskRowData(const Task *t, int column, int role) const
 {
     switch (column) {
     case TextColumn: return taskData(t, role);
+    case TagsColumn: return tagsData(t, role);
     case EtaColumn: return etaData(t, role);
     case DueColumn: return dueData(t, role);
     default: return {};
@@ -643,6 +681,7 @@ QVariant TaskListModel::headerData(int section, Qt::Orientation orientation, int
         return {};
     switch (section) {
     case TextColumn: return tr("Task");
+    case TagsColumn: return tr("Tags");
     case EtaColumn: return tr("ETA");
     case DueColumn: return tr("Due");
     default: return {};
@@ -802,14 +841,10 @@ QVariant AgendaModel::taskRowData(const Task *t, int column, int role) const
     switch (column) {
     case TextColumn:
         return taskData(t, role);
+    case TagsColumn:
+        return tagsData(t, role);
     case EtaColumn:
         return etaData(t, role);
-    case FileColumn:
-        if (role == Qt::DisplayRole)
-            return QStringLiteral("%1:%2").arg(t->file->relPath).arg(t->line + 1);
-        if (role == Qt::ForegroundRole)
-            return m_colors.dim;
-        return {};
     default:
         return {};
     }
@@ -821,8 +856,8 @@ QVariant AgendaModel::headerData(int section, Qt::Orientation orientation, int r
         return {};
     switch (section) {
     case TextColumn: return tr("Task");
+    case TagsColumn: return tr("Tags");
     case EtaColumn: return tr("ETA");
-    case FileColumn: return tr("File");
     default: return {};
     }
 }

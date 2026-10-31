@@ -3,6 +3,8 @@
 #include <QStyledItemDelegate>
 #include <QTreeView>
 
+#include <vector>
+
 class FlatTaskModel;
 
 // Draws column 0 of task rows: indentation guides and an expand chevron (in
@@ -22,6 +24,9 @@ public:
         QRect text;
     };
     static Layout layoutFor(const QRect &cell, const QModelIndex &index, bool tree);
+    // Chips of a tag cell, left to right; tags that don't fit get no rect.
+    static std::vector<QRect> tagRects(const QRect &cell, const QStringList &tags, const QFont &font);
+    static QFont smallFont(const QFont &font); // tag chips and the progress pill
 
     TaskDelegate(bool tree, QObject *parent = nullptr);
 
@@ -51,6 +56,7 @@ public:
 
 signals:
     void checkClicked(const QModelIndex &index);
+    void tagClicked(const QString &tag); // without '#'
 
 protected:
     void mousePressEvent(QMouseEvent *event) override;
@@ -58,8 +64,8 @@ protected:
     void keyPressEvent(QKeyEvent *event) override;
 
 private:
-    enum class Hit { None, Arrow, Check };
-    Hit hitTest(const QPoint &pos, QModelIndex *index) const;
+    enum class Hit { None, Arrow, Check, Tag };
+    Hit hitTest(const QPoint &pos, QModelIndex *index, QString *tag = nullptr) const;
     bool handleHit(const QPoint &pos);
     FlatTaskModel *listModel() const;
     void selectRow(int row);
