@@ -747,8 +747,18 @@ QVariant TaskListModel::groupData(const Group &g, int column, int role) const
     if (column != TextColumn)
         return {};
     switch (role) {
-    case Qt::DisplayRole: return g.file->relPath;
-    case ProgressRole: return QPoint(g.file->done, g.file->total);
+    case Qt::DisplayRole:
+        if (m_templateHeaders) {
+            QString name = g.file->relPath;
+            if (name.endsWith(QLatin1String(".md"), Qt::CaseInsensitive))
+                name.chop(3);
+            return name;
+        }
+        return g.file->relPath;
+    case ProgressRole:
+        if (m_templateHeaders)
+            return {}; // progress means nothing for a template (states reset on insert)
+        return QPoint(g.file->done, g.file->total);
     case Qt::FontRole: return m_bold;
     case Qt::ToolTipRole: return g.file->path;
     default: return {};

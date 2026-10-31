@@ -24,7 +24,7 @@ cd build && ctest --output-on-failure # offscreen; 60 s timeout each (a test tha
 
 # Headless checks (only the given dirs; nothing is persisted):
 QT_QPA_PLATFORM=offscreen ./build/todomd --bench DIR...
-QT_QPA_PLATFORM=offscreen ./build/todomd --screenshot out.png [--tab agenda] [--theme soft] DIR...
+QT_QPA_PLATFORM=offscreen ./build/todomd --screenshot out.png [--tab agenda|templates] [--theme soft] DIR...
 # Screenshots read the real settings (filters, collapse state). Isolate them with
 # XDG_CONFIG_HOME=/some/dir, and put a todomd/todomd.conf there to set filters.
 ```
@@ -59,18 +59,20 @@ free-text `contains` is the slowest). Re-run `--bench` after touching the load o
 | `src/task.h` | `Task` (incl. `tags`), `TaskFile`, `TaskState`. Both derive from `Node{isFile}`. `Task::listRow` is owned by `TaskListModel`. |
 | `src/parser.*` | Byte-level line parser and pure line transforms (`setState`, `setDue`, `setEta`, `setContent`, `parseEta`). |
 | `src/edits.*` | `Edit` (range of lines: expected `before`, replacement `after`), `LineBuffer` (preserves CRLF / trailing newline), `applyEdits()`, which also returns the inverse edits for undo. |
+| `src/templates.*` | List templates (pure, in `todocore`): `.templates/` dir lookup, listing, `fromTasks` (save) and `instantiate` (insert). |
 | `src/editor.*` | Builds the command for "Open in editor" from `$EDITOR` (pure `editor::build`, unit tested). |
 | `src/store.*` | `TaskStore`: several roots, async load (thread pool), `QFileSystemWatcher` sync, the **only** writer to disk, undo/redo. |
 | `src/models.*` | `TaskFilter` (state / words / ETA / `due:` / `done:` / `is:` / `#tag`), `TagIndex`, `TaskColors`, `FlatTaskModel` (tree as a flat list: groups, filtering, collapse) with `TaskListModel` (group = file) and `AgendaModel` (group = day; single-day mode for the sidebar). |
-| `src/dialogs.*` | Due-date picker, find/replace, ETA picker (number + unit + presets). |
+| `src/dialogs.*` | Due-date picker, add task (`AddTaskDialog`: text + due choice), find/replace, ETA picker (number + unit + presets). |
 | `src/theme.*` | Light (default) / Soft (grey light) / Dark / System. Fusion style + palette. |
 | `src/taskview.*` | `TaskDelegate` (draws checkbox, chevron, guides, header band, progress pill) and `TaskView` (chevron/checkbox/tag-chip clicks, Left/Right keys, optional header spans). |
 | `src/sidebar.*` | `Sidebar`: stat tiles (click = filter), `TaskCalendar` (dots on due days), single-day `AgendaModel` list, add box, `TagCloud`. |
+| `src/templatespage.*` | `TemplatesPage`: the Templates tab's frame (buttons + empty-state hint around a `TaskView`). |
 | `src/tagcompleter.*` | `TagCompleter`: completes the `#word` under the cursor in any `QLineEdit` from `TagIndex`. |
 | `src/mainwindow.*` | Toolbar, tabs, actions and shortcuts, bulk ops, selection/scroll preservation. |
-| `tests/` | `test_core` (parser, edits, ETA, editor command), `test_store` (store + models under `QAbstractItemModelTester`, real temp dirs and watcher, multiple roots), `test_window` (drives shortcuts on the real window). |
+| `tests/` | `test_core` (parser, edits, ETA, editor command, templates), `test_store` (store + models under `QAbstractItemModelTester`, real temp dirs and watcher, multiple roots), `test_window` (drives shortcuts on the real window). |
 
-CMake targets: `todocore` (parser, edits, editor; Qt Core only) → `todoapp` (store,
+CMake targets: `todocore` (parser, edits, editor, templates; Qt Core only) → `todoapp` (store,
 models, window) → `todomd` (just `main.cpp`). The tests link the libraries.
 
 ## Parsing rules (decisions not spelled out in the syntax doc)
@@ -111,9 +113,16 @@ models, window) → `todomd` (just `main.cpp`). The tests link the libraries.
 - New tasks (add task / subtask) get `+<today>` via `parser::setCreated`, unless the
   typed text already has a `+date`. All adds go through `MainWindow::newTaskLine` +
   `insertTask` (after an anchor's last descendant) or `appendTask` (end of file).
+- N / Shift+N use `AddTaskDialog`: the text plus a due choice (None (default) · Today ·
+  Tomorrow · Next week = +7 days · Next month = +1 month · Pick… = `DueDateDialog`), the
+  resolved date shown under the buttons. A `!date` typed in the text wins (`newTaskLine`).
 - A task with nowhere to go (N with nothing selected, or the sidebar add box with no day-list
   selection) is appended to `todo.md` in the first root that has one, else the first root
   (`defaultTaskFile`); the file is created if missing.
+- Template files are written directly (not through a store) only when created: Save as
+  template and New template use `templates::save`; rename/delete are plain file ops. Edits
+  inside a template go through `m_templateStore` (undoable); inserting one is a normal edit
+  of the tasks store.
 - `setState` adds `x<today>` / `-<today>` when marking done/cancelled and removes
   both when moving back to todo/doing. It leaves the line untouched if the state
   doesn't change, so an existing completion date is kept.
@@ -226,13 +235,38 @@ day in the sidebar read "174 days overdue".
 - Shortcuts: Space toggle done · X done · P in progress · T todo · C cancelled ·
   D due date · Shift+D clear due · ~ set ETA (number + unit dialog) · Ctrl+B sidebar · F2/double-click edit (multi-select →
   replace dialog) · Ctrl+H find/replace · N add task below · Shift+N add subtask · Del delete ·
-  E open in `$EDITOR` · Ctrl+C copy as list · Ctrl+F or / filter (Esc clears, ↓ back to list) ·
-  Alt+1..4 show todo/doing/done/cancelled · Ctrl+1/2 tabs · ←/→ collapse/expand ·
+  E open in `$EDITOR` · Ctrl+C copy as list · Ctrl+T insert template · Ctrl+3 templates tab · Ctrl+F or / filter (Esc clears, ↓ back to list) ·
+  Alt+1..4 show todo/doing/done/cancelled · Ctrl+1/2/3 tabs · ←/→ collapse/expand ·
   Ctrl+. expand all · Ctrl+, collapse all groups (current tab) · Ctrl+Z / Ctrl+Shift+Z undo/redo ·
   Ctrl+O add directory · F5 reload.
   Single-key shortcuts are window-wide. `QLineEdit` eats printable keys via
   ShortcutOverride, so typing in the filter or the inline editor is safe. `~` is bound
   with and without Shift, because layouts differ.
+- List templates: markdown files in `.templates/` of the first root that has one, else the
+  first root (`templates::dirFor`). Hidden, so the scanner never shows them as tasks.
+  "Save as template…" (context/Edit menu) saves the selected tasks + subtasks: reset to
+  todo, all dates removed, ETAs/tags kept, name suggested from the first task. "Insert
+  template ▸" (context/Edit menu, Ctrl+T pops it at the current row) lists them, plus "As
+  subtasks of the selected task", "Edit ▸" (opens in `$EDITOR`) and "Open templates folder".
+  Inserting goes where N would (after the selected task's subtree at its level, else the
+  selected file, else `todo.md`), re-indented with the file's indent unit, every task todo
+  and `+<today>` (the file's other dates dropped, except a hand-written `!due`). The inserted
+  rows end up selected so D / ~ apply to all of them.
+- Templates tab (third tab, Ctrl+3; "Manage templates…" in the template menu) is a task list
+  like the Tasks tab: a second `TaskStore` (`m_templateStore`, rooted at the `.templates`
+  dir via `syncTemplateRoots`, re-pointed on every load of the main store) with its own
+  `TaskListModel` (`setTemplateHeaders`: header = name without `.md`, no progress pill) and
+  pane (`m_templates`, Due column hidden). Every task action works there (N, Shift+N, F2,
+  Del, X, ~, tags…) and edits are undoable: `Pane::store` picks the store for undo/redo and
+  `storeForPath` routes `runEdits` by path, so a sidebar add while on that tab still goes to
+  the tasks store. Only Save as template / Insert template (`m_tasksOnlyActions`) are off
+  there. `TemplatesPage` is just the frame: New template… (writes the file with
+  "- [ ] New task", then `m_editWhenLoaded` opens the inline editor on it once loaded),
+  Rename…, Delete template (confirm), Open in $EDITOR, Insert into tasks (switches to Tasks
+  and inserts like Ctrl+T) — all on the template of the current row; renames and deletes
+  reach the list through the directory watcher. Template tasks never reach the sidebar,
+  tag index or status counts (those use the main store only).
+  `--screenshot --tab templates` shows it.
 - Copy as list (Ctrl+C, context menu): selected tasks + subtasks as `- text` lines, indented
   per selected ancestor (`tasksAsBulletList`). Subtasks the filter hides are left out; tasks
   you explicitly selected never are.

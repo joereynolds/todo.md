@@ -6,9 +6,12 @@
 #include "dialogs.h"
 #include "sidebar.h"
 #include "taskview.h"
+#include "templatespage.h"
 
 #include <QAbstractButton>
+#include <QAction>
 #include <QAbstractItemModel>
+#include <QCalendarWidget>
 #include <QApplication>
 #include <QClipboard>
 #include <QComboBox>
@@ -20,7 +23,12 @@
 #include <QDir>
 #include <QFile>
 #include <QInputDialog>
+#include <QLabel>
 #include <QLineEdit>
+#include <QPlainTextEdit>
+#include <QMessageBox>
+#include <QListWidget>
+#include <QMenu>
 #include <QSettings>
 #include <QSignalSpy>
 #include <QTemporaryDir>
@@ -202,9 +210,10 @@ private slots:
     {
         select(2);
         QTimer::singleShot(100, this, [] {
-            auto *dlg = qobject_cast<QInputDialog *>(QApplication::activeModalWidget());
+            auto *dlg = qobject_cast<AddTaskDialog *>(QApplication::activeModalWidget());
             QVERIFY(dlg);
-            dlg->setTextValue(QStringLiteral("b2"));
+            QVERIFY(dlg->dueButton("none")->isChecked()); // no due date unless chosen
+            dlg->lineEdit()->setText(QStringLiteral("b2"));
             dlg->accept();
         });
         key(Qt::Key_N, Qt::ShiftModifier);
@@ -214,12 +223,232 @@ private slots:
         QCOMPARE(m_view->currentIndex().row(), 4);
     }
 
+    void addTaskWithDue()
+    {
+        const QByteArray before = contents();
+        const QDate today = QDate::currentDate();
+        const QString t = today.toString(Qt::ISODate);
+
+        // Tomorrow: one click, then Enter in the text box.
+        select(1); // a
+        QTimer::singleShot(100, this, [] {
+            auto *dlg = qobject_cast<AddTaskDialog *>(QApplication::activeModalWidget());
+            QVERIFY(dlg);
+            dlg->dueButton("tomorrow")->click();
+            QTest::keyClicks(dlg->lineEdit(), "buy milk");
+            QTest::keyClick(dlg->lineEdit(), Qt::Key_Return);
+        });
+        key(Qt::Key_N);
+        QCOMPARE(contents(), QByteArray(before).replace("- [ ] a\n", QStringLiteral("- [ ] a\n- [ ] buy milk !%1 +%2\n")
+                                                                         .arg(today.addDays(1).toString(Qt::ISODate), t)
+                                                                         .toUtf8()));
+        key(Qt::Key_Z, Qt::ControlModifier);
+        QCOMPARE(contents(), before);
+
+        // Pick…: the calendar dialog chooses the date; a hand-typed !date still wins.
+        select(1);
+        QTimer::singleShot(100, this, [this] {
+            auto *dlg = qobject_cast<AddTaskDialog *>(QApplication::activeModalWidget());
+            QVERIFY(dlg);
+            dlg->lineEdit()->setText(QStringLiteral("dentist"));
+            QTimer::singleShot(100, this, [] {
+                auto *cal = qobject_cast<DueDateDialog *>(QApplication::activeModalWidget());
+                QVERIFY(cal);
+                cal->findChild<QCalendarWidget *>()->setSelectedDate(QDate(2030, 1, 2));
+                cal->accept();
+            });
+            dlg->dueButton("pick")->click();
+            QVERIFY(dlg->dueButton("pick")->isChecked());
+            QCOMPARE(dlg->due(), QDate(2030, 1, 2));
+            dlg->accept();
+        });
+        key(Qt::Key_N);
+        QCOMPARE(contents(), QByteArray(before).replace("- [ ] a\n", QStringLiteral("- [ ] a\n- [ ] dentist !2030-01-02 +%1\n")
+                                                                         .arg(t)
+                                                                         .toUtf8()));
+        key(Qt::Key_Z, Qt::ControlModifier);
+        QCOMPARE(contents(), before);
+    }
+
     void copyAsList()
     {
         select(2); // b, with subtasks b1 and b2 (added above)
         QApplication::clipboard()->clear();
         key(Qt::Key_C, Qt::ControlModifier);
         QCOMPARE(QApplication::clipboard()->text(), QString("- b\n  - b1\n  - b2\n"));
+    }
+
+    void saveAndInsertTemplate()
+    {
+        const QString today = QDate::currentDate().toString(Qt::ISODate);
+        const QByteArray before = contents();
+        QCOMPARE(before, QStringLiteral("- [ ] a\n- [ ] b\n  - [ ] b1\n  - [ ] b2 +%1\n- [ ] c\n").arg(today).toUtf8());
+        auto action = [&](const QString &text) -> QAction * {
+            for (QAction *a : m_window->findChildren<QAction *>()) {
+                if (a->text() == text)
+                    return a;
+            }
+            return nullptr;
+        };
+
+        // Save b and its subtasks as "errands" (the suggested name is "b").
+        select(2);
+        QTimer::singleShot(100, this, [] {
+            auto *dlg = qobject_cast<QInputDialog *>(QApplication::activeModalWidget());
+            QVERIFY(dlg);
+            QCOMPARE(dlg->textValue(), QString("b"));
+            dlg->setTextValue(QStringLiteral("errands"));
+            dlg->accept();
+        });
+        QAction *save = action(QStringLiteral("Save as te&mplate…"));
+        QVERIFY(save);
+        save->trigger();
+        QFile tpl(m_dir.path() + "/.templates/errands.md");
+        QVERIFY(tpl.open(QIODevice::ReadOnly));
+        QCOMPARE(tpl.readAll(), QByteArray("- [ ] b\n  - [ ] b1\n  - [ ] b2\n"));
+        QCOMPARE(m_view->model()->rowCount(), 6); // .templates is hidden: no new file group
+
+        // Insert it after a: three new tasks, created today, selected.
+        select(1);
+        QMenu *menu = nullptr;
+        for (QMenu *m : m_window->findChildren<QMenu *>()) {
+            if (m->title() == QStringLiteral("&Insert template"))
+                menu = m;
+        }
+        QVERIFY(menu);
+        emit menu->aboutToShow();
+        QAction *errands = nullptr;
+        for (QAction *a : menu->actions()) {
+            if (a->text() == QStringLiteral("errands"))
+                errands = a;
+        }
+        QVERIFY(errands);
+        errands->trigger();
+        QCOMPARE(contents(), QStringLiteral("- [ ] a\n- [ ] b +%1\n  - [ ] b1 +%1\n  - [ ] b2 +%1\n"
+                                            "- [ ] b\n  - [ ] b1\n  - [ ] b2 +%1\n- [ ] c\n")
+                                 .arg(today)
+                                 .toUtf8());
+        QCOMPARE(m_view->selectionModel()->selectedRows().size(), 3);
+        QCOMPARE(m_view->currentIndex().row(), 2);
+        key(Qt::Key_Z, Qt::ControlModifier);
+        QCOMPARE(contents(), before);
+    }
+
+    // Runs after saveAndInsertTemplate, which left the template "errands".
+    void templatesTab()
+    {
+        const QByteArray tasksBefore = contents();
+        const QString today = QDate::currentDate().toString(Qt::ISODate);
+        auto *tabs = m_window->findChild<QTabWidget *>();
+        auto *page = m_window->findChild<TemplatesPage *>();
+        QVERIFY(page);
+        auto *tv = page->findChild<QTreeView *>();
+        QVERIFY(tv);
+        QAbstractItemModel *tm = tv->model();
+        const QString dir = m_dir.path() + "/.templates/";
+        auto read = [](const QString &p) {
+            QFile f(p);
+            return f.open(QIODevice::ReadOnly) ? f.readAll() : QByteArray("<missing>");
+        };
+        auto answerNextDialog = [this](std::function<void(QWidget *)> fn) {
+            QTimer::singleShot(100, this, [fn] {
+                QWidget *w = QApplication::activeModalWidget();
+                QVERIFY(w);
+                fn(w);
+            });
+        };
+        auto rowOf = [&](const QString &text) {
+            for (int r = 0; r < tm->rowCount(); ++r) {
+                if (tm->index(r, 0).data().toString() == text)
+                    return r;
+            }
+            return -1;
+        };
+        auto setCurrent = [&](int row) {
+            tv->selectionModel()->setCurrentIndex(tm->index(row, 0),
+                                                  QItemSelectionModel::ClearAndSelect | QItemSelectionModel::Rows);
+        };
+
+        // The templates as a task list: a header per template, checkboxes and all.
+        key(Qt::Key_3, Qt::ControlModifier);
+        QCOMPARE(tabs->currentWidget(), page);
+        QTRY_COMPARE(tm->rowCount(), 4);
+        QCOMPARE(tm->index(0, 0).data().toString(), QString("errands"));
+        QCOMPARE(tm->index(0, 0).data(TaskModelBase::HeaderRole).toBool(), true);
+        QCOMPARE(tm->index(2, 0).data().toString(), QString("b1"));
+        QCOMPARE(tm->index(2, 0).data(TaskModelBase::StateRole).toInt(), int(TaskState::Todo));
+
+        // The usual task keys edit the template (not the tasks), with their own undo.
+        setCurrent(1); // b
+        key(Qt::Key_X);
+        QCOMPARE(read(dir + "errands.md"), QStringLiteral("- [x] b x%1\n  - [x] b1 x%1\n  - [x] b2 x%1\n").arg(today).toUtf8());
+        QCOMPARE(contents(), tasksBefore);
+        key(Qt::Key_Z, Qt::ControlModifier);
+        QCOMPARE(read(dir + "errands.md"), QByteArray("- [ ] b\n  - [ ] b1\n  - [ ] b2\n"));
+        QCOMPARE(contents(), tasksBefore);
+        setCurrent(1);
+        answerNextDialog([](QWidget *w) {
+            auto *dlg = qobject_cast<AddTaskDialog *>(w);
+            QVERIFY(dlg);
+            dlg->lineEdit()->setText("milk");
+            dlg->accept();
+        });
+        key(Qt::Key_N);
+        QCOMPARE(read(dir + "errands.md"), QStringLiteral("- [ ] b\n  - [ ] b1\n  - [ ] b2\n- [ ] milk +%1\n").arg(today).toUtf8());
+
+        // New template: created with one task, opened for editing straight away.
+        answerNextDialog([](QWidget *w) {
+            auto *dlg = qobject_cast<QInputDialog *>(w);
+            QVERIFY(dlg);
+            dlg->setTextValue("trip");
+            dlg->accept();
+        });
+        page->button("new")->click();
+        QTRY_VERIFY(rowOf("trip") >= 0);
+        QLineEdit *editor = nullptr; // the inline editor
+        QTRY_VERIFY((editor = tv->viewport()->findChild<QLineEdit *>()) && editor->isVisible());
+        QCOMPARE(tv->currentIndex().data().toString(), QString("New task"));
+        QCOMPARE(editor->text(), QString("New task"));
+        editor->setText("Passport");
+        QTest::keyClick(editor, Qt::Key_Return);
+        QTRY_COMPARE(read(dir + "trip.md"), QByteArray("- [ ] Passport\n"));
+
+        // Rename and delete act on the template of the current row.
+        QTRY_VERIFY(rowOf("Passport") >= 0);
+        setCurrent(rowOf("Passport"));
+        answerNextDialog([](QWidget *w) {
+            auto *dlg = qobject_cast<QInputDialog *>(w);
+            QVERIFY(dlg);
+            QCOMPARE(dlg->textValue(), QString("trip"));
+            dlg->setTextValue("holiday");
+            dlg->accept();
+        });
+        page->button("rename")->click();
+        QTRY_VERIFY(rowOf("holiday") >= 0);
+        QVERIFY(!QFile::exists(dir + "trip.md"));
+        setCurrent(rowOf("holiday"));
+        answerNextDialog([](QWidget *w) {
+            auto *box = qobject_cast<QMessageBox *>(w);
+            QVERIFY(box);
+            box->button(QMessageBox::Yes)->click();
+        });
+        page->button("delete")->click();
+        QVERIFY(!QFile::exists(dir + "holiday.md"));
+        QTRY_COMPARE(rowOf("holiday"), -1);
+        QCOMPARE(contents(), tasksBefore);
+
+        // Insert into tasks: back on the Tasks tab, after the selected task there.
+        key(Qt::Key_1, Qt::ControlModifier);
+        select(5); // c
+        key(Qt::Key_3, Qt::ControlModifier);
+        setCurrent(rowOf("errands"));
+        page->button("insert")->click();
+        QCOMPARE(tabs->currentIndex(), 0);
+        QCOMPARE(contents(), tasksBefore + QStringLiteral("- [ ] b +%1\n  - [ ] b1 +%1\n  - [ ] b2 +%1\n- [ ] milk +%1\n")
+                                               .arg(today)
+                                               .toUtf8());
+        key(Qt::Key_Z, Qt::ControlModifier); // the Tasks tab's undo
+        QCOMPARE(contents(), tasksBefore);
     }
 
     void directoriesRemembered()

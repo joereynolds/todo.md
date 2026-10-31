@@ -232,6 +232,8 @@ public:
     // Expands the task's file and ancestors so it gets a row; returns its index
     // (invalid if the filter hides it).
     QModelIndex reveal(const Task *task);
+    // Group headers show the file name without ".md" (the Templates tab).
+    void setTemplateHeaders(bool on) { m_templateHeaders = on; }
 
 protected:
     void collectGroups(std::vector<Group> &out) const override;
@@ -239,6 +241,9 @@ protected:
     QVariant taskRowData(const Task *t, int column, int role) const override;
     void reindex(size_t first) override;
     void clearIndex() override;
+
+private:
+    bool m_templateHeaders = false;
 };
 
 // Open tasks with a due date, one group per day, each with its subtasks.

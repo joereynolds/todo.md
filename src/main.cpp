@@ -33,7 +33,7 @@ int main(int argc, char *argv[])
                                            "(works with QT_QPA_PLATFORM=offscreen)."),
                             QStringLiteral("file"));
     cli.addOption(shot);
-    QCommandLineOption tab(QStringLiteral("tab"), QStringLiteral("Tab to show: tasks or agenda."), QStringLiteral("name"));
+    QCommandLineOption tab(QStringLiteral("tab"), QStringLiteral("Tab to show: tasks, agenda or templates."), QStringLiteral("name"));
     cli.addOption(tab);
     QCommandLineOption themeOpt(QStringLiteral("theme"),
                                 QStringLiteral("Theme for this run only: light, soft, dark or system."),
@@ -71,7 +71,10 @@ int main(int argc, char *argv[])
     TaskStore store;
     MainWindow window(&store);
     if (cli.isSet(tab))
-        window.showTab(cli.value(tab) == QLatin1String("agenda") ? 1 : 0);
+        {
+            const QString t = cli.value(tab);
+            window.showTab(t == QLatin1String("agenda") ? 1 : t == QLatin1String("templates") ? 2 : 0);
+        }
 
     if (cli.isSet(bench)) {
         QElapsedTimer total;

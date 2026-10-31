@@ -7,6 +7,8 @@
 #include "sidebar.h"
 #include "store.h"
 #include "tagcompleter.h"
+#include "templates.h"
+#include "templatespage.h"
 #include "taskview.h"
 #include "theme.h"
 
@@ -17,6 +19,7 @@
 #include <QClipboard>
 #include <QCloseEvent>
 #include <QComboBox>
+#include <QCursor>
 #include <QDesktopServices>
 #include <QDir>
 #include <QFileDialog>
@@ -27,6 +30,7 @@
 #include <QKeyEvent>
 #include <QLabel>
 #include <QLineEdit>
+#include <QListWidget>
 #include <QMenu>
 #include <QMenuBar>
 #include <QMessageBox>
@@ -135,6 +139,16 @@ MainWindow::MainWindow(TaskStore *store, QWidget *parent) : QMainWindow(parent),
     m_agendaModel = new AgendaModel(store, this);
     m_list.model = m_listModel;
     m_agenda.model = m_agendaModel;
+    m_list.store = m_agenda.store = store;
+
+    // Templates are task files too, in a store of their own (rooted at the
+    // hidden .templates directory) so they never mix with real tasks.
+    m_templateStore = new TaskStore(this);
+    connect(m_templateStore, &TaskStore::aboutToChange, this, [this] { m_saved[2] = saveView(m_templates); });
+    m_templateModel = new TaskListModel(m_templateStore, this);
+    m_templateModel->setTemplateHeaders(true);
+    m_templates.model = m_templateModel;
+    m_templates.store = m_templateStore;
     m_tagIndex = new TagIndex(store, this);
     m_sidebar = new Sidebar(store, m_tagIndex, this);
     new TagCompleter(m_tagIndex, m_sidebar->addBox());
@@ -162,6 +176,35 @@ MainWindow::MainWindow(TaskStore *store, QWidget *parent) : QMainWindow(parent),
                 }, Qt::QueuedConnection);
     }
 
+    connect(m_templateStore, &TaskStore::changed, this, [this] {
+        const bool forced = m_forceSelect.has_value();
+        if (forced) {
+            m_saved[2].selection = *m_forceSelect;
+            m_saved[2].current = m_forceSelect->empty() ? std::nullopt : std::optional<LineKey>(m_forceSelect->front());
+            m_forceSelect.reset();
+        }
+        restoreView(m_templates, m_saved[2], forced);
+        // A template just created with New…: start editing its first task.
+        if (!m_editWhenLoaded.isEmpty()) {
+            if (TaskFile *f = m_templateStore->fileByPath(m_editWhenLoaded); f && !f->tasks.empty()) {
+                m_editWhenLoaded.clear();
+                const QModelIndex i = m_templateModel->indexOf(&f->tasks.front());
+                m_templates.view->setCurrentIndex(i);
+                m_templates.view->scrollTo(i);
+                if (onTemplatesTab())
+                    m_templates.view->edit(i);
+            }
+        }
+        updateTemplatesPage();
+    });
+    connect(m_templateModel, &TaskModelBase::contentEdited, this,
+            [this](const QString &path, int line, const QString &before, const QString &after) {
+                runEdits({{path, line, {before}, {after}}}, tr("Edit template"));
+            }, Qt::QueuedConnection);
+    connect(m_templateStore, &TaskStore::undoStateChanged, this, &MainWindow::updateUndoActions);
+    connect(m_templateStore, &TaskStore::message, this, [this](const QString &m) { statusBar()->showMessage(m, 6000); });
+    // The templates directory follows the roots.
+    connect(store, &TaskStore::loadStarted, this, &MainWindow::syncTemplateRoots);
     connect(store, &TaskStore::undoStateChanged, this, &MainWindow::updateUndoActions);
     connect(store, &TaskStore::message, this, [this](const QString &m) { statusBar()->showMessage(m, 6000); });
     connect(store, &TaskStore::loadStarted, this, [this](const QStringList &roots) {
@@ -224,11 +267,16 @@ void MainWindow::buildActions()
         return a;
     };
     m_addDir = make(tr("&Add directory…"), QKeySequence::Open, [this] { chooseDirectory(); });
-    m_reload = make(tr("&Reload"), QKeySequence(Qt::Key_F5), [this] { m_store->reload(); });
+    m_reload = make(tr("&Reload"), QKeySequence(Qt::Key_F5), [this] {
+        m_store->reload();
+        if (!m_templateStore->roots().isEmpty())
+            m_templateStore->reload();
+    });
     m_quit = make(tr("&Quit"), QKeySequence::Quit, [this] { close(); });
 
-    m_undo = make(tr("&Undo"), QKeySequence::Undo, [this] { m_store->undo(); });
-    m_redo = make(tr("&Redo"), QKeySequence::Redo, [this] { m_store->redo(); });
+    // Undo/redo follow the tab: the templates have their own history.
+    m_undo = make(tr("&Undo"), QKeySequence::Undo, [this] { current().store->undo(); });
+    m_redo = make(tr("&Redo"), QKeySequence::Redo, [this] { current().store->redo(); });
 
     m_toggle = make(tr("Toggle &done"), QKeySequence(Qt::Key_Space), [this] { toggleDone(); });
     m_todo = make(tr("Mark &todo"), QKeySequence(Qt::Key_T), [this] { setState(TaskState::Todo); });
@@ -247,6 +295,17 @@ void MainWindow::buildActions()
     m_addSub = make(tr("Add &subtask…"), QKeySequence(Qt::SHIFT | Qt::Key_N), [this] { addTask(true); });
     m_delete = make(tr("De&lete…"), QKeySequence::Delete, [this] { deleteTasks(); });
     m_openEditor = make(tr("Open in edi&tor ($EDITOR)"), QKeySequence(Qt::Key_E), [this] { openInEditor(); });
+    m_saveTemplate = make(tr("Save as te&mplate…"), QKeySequence(), [this] { saveTemplate(); });
+    m_saveTemplate->setToolTip(tr("Save the selected tasks (with subtasks) as a reusable list template"));
+    m_insertTemplate = make(tr("Insert template…"), QKeySequence(Qt::CTRL | Qt::Key_T), [this] {
+        // Pop the template menu up at the current row.
+        QTreeView *v = current().view;
+        const QRect r = v->visualRect(v->currentIndex());
+        const QPoint at = r.isValid() ? v->viewport()->mapToGlobal(r.bottomLeft()) : QCursor::pos();
+        m_templateMenu->exec(at);
+    });
+    m_templateMenu = new QMenu(tr("&Insert template"), this);
+    connect(m_templateMenu, &QMenu::aboutToShow, this, &MainWindow::populateTemplateMenu);
     m_copyList = make(tr("&Copy as list"), QKeySequence::Copy, [this] { copyAsList(); });
     m_copyList->setToolTip(tr("Copy the selected tasks and their subtasks as a bulleted list"));
 
@@ -293,6 +352,9 @@ void MainWindow::buildActions()
     m_toggleSidebar->setToolTip(tr("Show or hide the sidebar (Ctrl+B)"));
     m_tasksTab = make(tr("&Tasks"), QKeySequence(Qt::CTRL | Qt::Key_1), [this] { m_tabs->setCurrentIndex(0); });
     m_agendaTab = make(tr("&Agenda"), QKeySequence(Qt::CTRL | Qt::Key_2), [this] { m_tabs->setCurrentIndex(1); });
+    m_templatesTab = make(tr("Te&mplates"), QKeySequence(Qt::CTRL | Qt::Key_3), [this] { m_tabs->setCurrentIndex(2); });
+    // Task actions work on the Templates tab too (it's a task list); these don't.
+    m_tasksOnlyActions = {m_saveTemplate, m_insertTemplate};
 
     m_themeGroup = new QActionGroup(this);
     const QString current = s.value(QStringLiteral("view/theme"), QStringLiteral("light")).toString();
@@ -363,9 +425,13 @@ void MainWindow::buildUi()
     edit->addActions({m_edit, m_replace, m_add, m_addSub, m_delete});
     edit->addSeparator();
     edit->addActions({m_copyList, m_openEditor});
+    edit->addSeparator();
+    edit->addMenu(m_templateMenu);
+    edit->addAction(m_saveTemplate);
+    edit->addAction(m_insertTemplate);
 
     QMenu *view = menuBar()->addMenu(tr("&View"));
-    view->addActions({m_toggleSidebar, m_tasksTab, m_agendaTab});
+    view->addActions({m_toggleSidebar, m_tasksTab, m_agendaTab, m_templatesTab});
     view->addSeparator();
     view->addAction(m_focusFilter);
     for (QAction *a : m_showState)
@@ -459,7 +525,43 @@ void MainWindow::buildUi()
     m_tabs->setDocumentMode(true);
     m_tabs->addTab(m_list.view, tr("Tasks"));
     m_tabs->addTab(agendaPage, tr("Agenda"));
-    connect(m_tabs, &QTabWidget::currentChanged, this, [this] { current().view->setFocus(); });
+    m_templates.view = makeView(true);
+    m_templates.view->setModel(m_templateModel);
+    h = m_templates.view->header();
+    h->setStretchLastSection(false);
+    h->setSectionResizeMode(TaskListModel::TextColumn, QHeaderView::Stretch);
+    h->setSectionResizeMode(TaskListModel::TagsColumn, QHeaderView::Interactive);
+    h->resizeSection(TaskListModel::TagsColumn, tagsWidth);
+    h->setSectionResizeMode(TaskListModel::EtaColumn, QHeaderView::Fixed);
+    h->resizeSection(TaskListModel::EtaColumn, etaWidth);
+    h->hideSection(TaskListModel::DueColumn);
+    m_templatesPage = new TemplatesPage(m_templates.view, this);
+    m_tabs->addTab(m_templatesPage, tr("Templates"));
+    connect(m_templatesPage, &TemplatesPage::newRequested, this, &MainWindow::newTemplate);
+    connect(m_templatesPage, &TemplatesPage::renameRequested, this, &MainWindow::renameTemplate);
+    connect(m_templatesPage, &TemplatesPage::deleteRequested, this, &MainWindow::deleteTemplate);
+    connect(m_templatesPage, &TemplatesPage::openRequested, this, [this] {
+        const auto tasks = selectedTasks(false);
+        if (const QString name = currentTemplate(); !name.isEmpty())
+            openPathInEditor(templates::pathFor(templatesDir(), name), tasks.empty() ? 1 : tasks.front()->line + 1);
+    });
+    connect(m_templatesPage, &TemplatesPage::insertRequested, this, [this] {
+        const QString name = currentTemplate();
+        if (name.isEmpty())
+            return;
+        m_tabs->setCurrentIndex(0); // goes after the task selected there, as Ctrl+T would
+        insertTemplate(name, false);
+    });
+    connect(m_templates.view->selectionModel(), &QItemSelectionModel::currentChanged, this,
+            &MainWindow::updateTemplatesPage);
+    connect(m_tabs, &QTabWidget::currentChanged, this, [this] {
+        const bool templatesTab = onTemplatesTab();
+        for (QAction *a : m_tasksOnlyActions)
+            a->setEnabled(!templatesTab);
+        updateUndoActions();
+        updateTemplatesPage();
+        current().view->setFocus();
+    });
 
     m_splitter = new QSplitter(Qt::Horizontal, this);
     m_splitter->addWidget(m_sidebar);
@@ -511,12 +613,27 @@ void MainWindow::buildUi()
 
 MainWindow::Pane &MainWindow::current()
 {
-    return m_tabs && m_tabs->currentIndex() == 1 ? m_agenda : m_list;
+    return const_cast<Pane &>(std::as_const(*this).current());
 }
 
 const MainWindow::Pane &MainWindow::current() const
 {
-    return m_tabs && m_tabs->currentIndex() == 1 ? m_agenda : m_list;
+    const int i = m_tabs ? m_tabs->currentIndex() : 0;
+    return i == 1 ? m_agenda : i == 2 ? m_templates : m_list;
+}
+
+bool MainWindow::onTemplatesTab() const
+{
+    return m_tabs && m_tabs->currentIndex() == 2;
+}
+
+TaskStore *MainWindow::storeForPath(const QString &path) const
+{
+    for (const QString &r : m_templateStore->roots()) {
+        if (path.startsWith(r + u'/'))
+            return m_templateStore;
+    }
+    return m_store;
 }
 
 void MainWindow::showTab(int index)
@@ -616,6 +733,233 @@ std::vector<Task *> MainWindow::selectedTasks(bool withSubtasks) const
     return out;
 }
 
+// ---------------------------------------------------------------- templates
+
+QString MainWindow::templatesDir() const
+{
+    return templates::dirFor(m_store->roots());
+}
+
+void MainWindow::populateTemplateMenu()
+{
+    m_templateMenu->clear();
+    const QString dir = templatesDir();
+    const QStringList names = templates::names(dir);
+    if (names.isEmpty()) {
+        m_templateMenu->addAction(tr("No templates yet: select tasks, then Save as template…"))->setEnabled(false);
+    }
+    for (const QString &name : names)
+        m_templateMenu->addAction(name, this, [this, name] { insertTemplate(name, false); });
+    m_templateMenu->addSeparator();
+    if (!names.isEmpty()) {
+        QMenu *sub = m_templateMenu->addMenu(tr("As &subtasks of the selected task"));
+        sub->setEnabled(!selectedTasks(false).empty());
+        for (const QString &name : names)
+            sub->addAction(name, this, [this, name] { insertTemplate(name, true); });
+        QMenu *edit = m_templateMenu->addMenu(tr("&Edit"));
+        for (const QString &name : names)
+            edit->addAction(name, this, [this, dir, name] { openPathInEditor(templates::pathFor(dir, name), 1); });
+    }
+    m_templateMenu->addAction(tr("&Manage templates…"), this, [this] { m_tabs->setCurrentIndex(2); });
+    m_templateMenu->addAction(tr("Open templates &folder"), this, [this] {
+        const QString dir = templatesDir();
+        if (dir.isEmpty()) {
+            statusBar()->showMessage(tr("Add a directory first (Ctrl+O)"), 3000);
+            return;
+        }
+        QDir().mkpath(dir);
+        QDesktopServices::openUrl(QUrl::fromLocalFile(dir));
+    });
+}
+
+void MainWindow::syncTemplateRoots()
+{
+    const QString dir = templatesDir();
+    const QStringList roots = QFileInfo(dir).isDir() ? QStringList{TaskStore::normalizeRoot(dir)} : QStringList{};
+    if (roots != m_templateStore->roots())
+        m_templateStore->setRoots(roots);
+    updateTemplatesPage();
+}
+
+QString MainWindow::currentTemplate() const
+{
+    const TaskFile *f = m_templateModel->fileAt(m_templates.view->currentIndex());
+    return f ? QFileInfo(f->path).completeBaseName() : QString();
+}
+
+void MainWindow::updateTemplatesPage()
+{
+    if (!m_templatesPage)
+        return;
+    m_templatesPage->setCurrentTemplate(currentTemplate());
+    m_templatesPage->setEmpty(m_templateModel->rowCount() == 0 && !m_templateStore->isLoading(),
+                              !templatesDir().isEmpty());
+}
+
+void MainWindow::newTemplate()
+{
+    const QString dir = templatesDir();
+    if (dir.isEmpty())
+        return;
+    for (QString name;;) {
+        bool ok = false;
+        name = QInputDialog::getText(this, tr("New template"), tr("Template name:"), QLineEdit::Normal, name, &ok)
+                   .trimmed();
+        if (!ok || name.isEmpty())
+            return;
+        if (!templates::isValidName(name)) {
+            QMessageBox::warning(this, tr("New template"), tr("A template name can't contain / or \\ or start with a dot."));
+            continue;
+        }
+        const QString path = templates::pathFor(dir, name);
+        if (QFileInfo::exists(path)) {
+            QMessageBox::warning(this, tr("New template"), tr("There's already a template called \"%1\".").arg(name));
+            continue;
+        }
+        // A template needs a task to be listed; it's opened for editing as soon as it's loaded.
+        if (!templates::save(path, {QStringLiteral("- [ ] New task")})) {
+            statusBar()->showMessage(tr("Could not write %1").arg(path), 5000);
+            return;
+        }
+        m_editWhenLoaded = path;
+        syncTemplateRoots(); // otherwise the directory watcher picks the file up
+        return;
+    }
+}
+
+void MainWindow::renameTemplate()
+{
+    const QString old = currentTemplate();
+    const QString dir = templatesDir();
+    if (old.isEmpty())
+        return;
+    for (QString name = old;;) {
+        bool ok = false;
+        name = QInputDialog::getText(this, tr("Rename template"), tr("New name for \"%1\":").arg(old), QLineEdit::Normal,
+                                     name, &ok)
+                   .trimmed();
+        if (!ok || name.isEmpty() || name == old)
+            return;
+        if (!templates::isValidName(name)) {
+            QMessageBox::warning(this, tr("Rename template"), tr("A template name can't contain / or \\ or start with a dot."));
+            continue;
+        }
+        // A case-only rename is allowed (the "existing" file is this one on some file systems).
+        if (QFileInfo::exists(templates::pathFor(dir, name)) && name.compare(old, Qt::CaseInsensitive) != 0) {
+            QMessageBox::warning(this, tr("Rename template"), tr("There's already a template called \"%1\".").arg(name));
+            continue;
+        }
+        if (!QFile::rename(templates::pathFor(dir, old), templates::pathFor(dir, name)))
+            statusBar()->showMessage(tr("Could not rename %1").arg(old), 5000);
+        return; // the directory watcher updates the list
+    }
+}
+
+void MainWindow::deleteTemplate()
+{
+    const QString name = currentTemplate();
+    if (name.isEmpty())
+        return;
+    if (QMessageBox::question(this, tr("Delete template"), tr("Delete the template \"%1\"?").arg(name))
+        != QMessageBox::Yes)
+        return;
+    if (!QFile::remove(templates::pathFor(templatesDir(), name)))
+        statusBar()->showMessage(tr("Could not delete %1").arg(name), 5000);
+}
+
+void MainWindow::saveTemplate()
+{
+    const auto tasks = selectedTasks(true);
+    const QString dir = templatesDir();
+    if (tasks.empty() || dir.isEmpty()) {
+        statusBar()->showMessage(tr("Select the tasks to save as a template"), 3000);
+        return;
+    }
+    // Suggest a name from the first task: "Seeing GF" -> "seeing-gf".
+    QString suggestion = tasks.front()->text.toLower().simplified();
+    suggestion.replace(QRegularExpression(QStringLiteral("[^\\w]+")), QStringLiteral("-"));
+    suggestion = suggestion.left(40);
+    while (suggestion.endsWith(u'-'))
+        suggestion.chop(1);
+    QString name;
+    for (;;) {
+        bool ok = false;
+        name = QInputDialog::getText(this, tr("Save as template"),
+                                     tr("Template name (%n task(s)):", nullptr, int(tasks.size())), QLineEdit::Normal,
+                                     name.isEmpty() ? suggestion : name, &ok)
+                   .trimmed();
+        if (!ok || name.isEmpty())
+            return;
+        if (!templates::isValidName(name)) {
+            QMessageBox::warning(this, tr("Save as template"), tr("A template name can't contain / or \\ or start with a dot."));
+            continue;
+        }
+        break;
+    }
+    const QString path = templates::pathFor(dir, name);
+    if (QFileInfo::exists(path)
+        && QMessageBox::question(this, tr("Save as template"), tr("Replace the existing template \"%1\"?").arg(name))
+               != QMessageBox::Yes)
+        return;
+    if (!templates::save(path, templates::fromTasks(tasks))) {
+        statusBar()->showMessage(tr("Could not write %1").arg(path), 5000);
+        return;
+    }
+    statusBar()->showMessage(tr("Saved template \"%1\" (%n task(s))", nullptr, int(tasks.size())).arg(name), 4000);
+    syncTemplateRoots(); // the directory may have just been created
+}
+
+void MainWindow::insertTemplate(const QString &name, bool subtask)
+{
+    QFile in(templates::pathFor(templatesDir(), name));
+    if (!in.open(QIODevice::ReadOnly)) {
+        statusBar()->showMessage(tr("Could not read template \"%1\"").arg(name), 4000);
+        return;
+    }
+    const QByteArray data = in.readAll();
+    const auto tasks = selectedTasks(false);
+    Task *anchor = tasks.empty() ? nullptr : tasks.back();
+    if (subtask && !anchor)
+        return;
+    TaskFile *file = anchor ? anchor->file : selectedFile();
+    const QString path = file ? file->path : defaultTaskFile();
+    if (path.isEmpty()) {
+        statusBar()->showMessage(tr("Add a directory first (Ctrl+O)"), 3000);
+        return;
+    }
+    const QString unit = file ? indentUnit(file) : QStringLiteral("  ");
+    QString lead;
+    if (anchor) {
+        lead = parser::leadingWhitespace(anchor->prefix);
+        if (subtask)
+            lead = anchor->children.empty() ? lead + unit : parser::leadingWhitespace(anchor->children.front()->prefix);
+    }
+    const QStringList lines = templates::instantiate(data, lead, unit, QDate::currentDate());
+    if (lines.isEmpty()) {
+        statusBar()->showMessage(tr("Template \"%1\" has no tasks").arg(name), 4000);
+        return;
+    }
+    const QString label = tr("Insert template %1").arg(name);
+    // The inserted tasks end up selected, ready for e.g. a due date (D).
+    if (anchor) {
+        const Task *after = lastDescendant(anchor);
+        Edit e{path, after->line, {after->raw()}, QStringList{after->raw()} + lines};
+        std::vector<LineKey> keys;
+        for (int i = 0; i < lines.size(); ++i)
+            keys.push_back({path, after->line + 1 + i});
+        runEdits({e}, label, keys);
+        return;
+    }
+    runEdits({Edit{path, -1, {}, lines}}, label, std::vector<LineKey>{});
+    if (TaskFile *f = storeForPath(path)->fileByPath(path); f && f->tasks.size() >= size_t(lines.size())) {
+        SavedView sel;
+        for (size_t i = f->tasks.size() - size_t(lines.size()); i < f->tasks.size(); ++i)
+            sel.selection.push_back({path, f->tasks[i].line});
+        sel.current = sel.selection.front();
+        restoreView(current(), sel, true);
+    }
+}
+
 void MainWindow::copyAsList()
 {
     // Selected tasks with their subtasks, minus subtasks the filter hides
@@ -663,7 +1007,7 @@ MainWindow::SavedView MainWindow::saveView(const Pane &p) const
 void MainWindow::restoreView(Pane &p, const SavedView &s, bool scrollToCurrent)
 {
     auto viewIndex = [&](const LineKey &k) {
-        const Task *t = m_store->taskAt(k.path, k.line);
+        const Task *t = p.store->taskAt(k.path, k.line);
         return t ? p.model->indexOf(t) : QModelIndex();
     };
     QItemSelection sel;
@@ -691,7 +1035,7 @@ void MainWindow::runEdits(const std::vector<Edit> &edits, const QString &label,
         return;
     }
     m_forceSelect = std::move(select);
-    const int n = m_store->apply(edits, label);
+    const int n = storeForPath(edits.front().path)->apply(edits, label);
     m_forceSelect.reset();
     if (n > 0 && n == int(edits.size()))
         statusBar()->showMessage(tr("%1: %n line(s) changed", nullptr, n).arg(label), 4000);
@@ -854,30 +1198,31 @@ void MainWindow::addTask(bool subtask)
     const auto tasks = selectedTasks(false);
     Task *anchorTask = tasks.empty() ? nullptr : tasks.back();
     TaskFile *file = anchorTask ? anchorTask->file : selectedFile();
+    if (!file && onTemplatesTab()) {
+        statusBar()->showMessage(tr("Select a template to add to (or create one with New template…)"), 4000);
+        return;
+    }
     const QString path = file ? file->path : defaultTaskFile();
     if (path.isEmpty()) {
         statusBar()->showMessage(tr("Add a directory first (Ctrl+O)"), 3000);
         return;
     }
-    QString prompt = tr("New task in %1:").arg(file ? file->relPath : QStringLiteral("todo.md"));
+    QString prompt = tr("New task in %1:").arg(file ? (onTemplatesTab() ? QFileInfo(file->path).completeBaseName() : file->relPath)
+                                                    : QStringLiteral("todo.md"));
     if (anchorTask)
         prompt = subtask ? tr("New subtask of \"%1\":").arg(anchorTask->text)
                          : tr("New task after \"%1\":").arg(anchorTask->text);
-    QInputDialog dlg(this);
-    dlg.setWindowTitle(subtask ? tr("Add subtask") : tr("Add task"));
-    dlg.setLabelText(prompt);
-    dlg.setInputMode(QInputDialog::TextInput);
-    if (auto *edit = dlg.findChild<QLineEdit *>())
-        new TagCompleter(m_tagIndex, edit);
+    AddTaskDialog dlg(subtask ? tr("Add subtask") : tr("Add task"), prompt, this);
+    new TagCompleter(m_tagIndex, dlg.lineEdit());
     if (dlg.exec() != QDialog::Accepted)
         return;
-    const QString text = dlg.textValue();
+    const QString text = dlg.text();
     if (text.trimmed().isEmpty())
         return;
     if (anchorTask)
-        insertTask(text, anchorTask, subtask, {}, true);
+        insertTask(text, anchorTask, subtask, dlg.due(), true);
     else
-        appendTask(text, path, {}, true);
+        appendTask(text, path, dlg.due(), true);
 }
 
 QString MainWindow::newTaskLine(QString text, const QString &lead, const QDate &due)
@@ -903,7 +1248,7 @@ void MainWindow::appendTask(const QString &text, const QString &path, const QDat
         return;
     }
     runEdits({e}, tr("Add task"), std::vector<LineKey>{});
-    if (TaskFile *f = m_store->fileByPath(path); f && !f->tasks.empty()) {
+    if (TaskFile *f = storeForPath(path)->fileByPath(path); f && !f->tasks.empty()) {
         const LineKey k{path, f->tasks.back().line};
         restoreView(current(), {{k}, k, 0}, true);
     }
@@ -954,14 +1299,18 @@ void MainWindow::openInEditor()
     TaskFile *file = tasks.empty() ? selectedFile() : tasks.front()->file;
     if (!file)
         return;
-    const int line = tasks.empty() ? 1 : tasks.front()->line + 1;
+    openPathInEditor(file->path, tasks.empty() ? 1 : tasks.front()->line + 1);
+}
+
+void MainWindow::openPathInEditor(const QString &path, int line)
+{
     const QString cmd = editor::editorFromEnvironment();
     if (cmd.isEmpty()) {
         statusBar()->showMessage(tr("$EDITOR is not set; opening with the default application"), 5000);
-        QDesktopServices::openUrl(QUrl::fromLocalFile(file->path));
+        QDesktopServices::openUrl(QUrl::fromLocalFile(path));
         return;
     }
-    const editor::Launch l = editor::build(cmd, editor::findTerminal(), file->path, line);
+    const editor::Launch l = editor::build(cmd, editor::findTerminal(), path, line);
     if (!l.isValid()) {
         statusBar()->showMessage(tr("%1 needs a terminal, but none was found (set $TERMINAL)").arg(cmd), 6000);
         return;
@@ -1015,10 +1364,11 @@ void MainWindow::updateStatus()
 
 void MainWindow::updateUndoActions()
 {
-    m_undo->setEnabled(m_store->canUndo());
-    m_redo->setEnabled(m_store->canRedo());
-    m_undo->setText(m_store->canUndo() ? tr("&Undo %1").arg(m_store->undoLabel()) : tr("&Undo"));
-    m_redo->setText(m_store->canRedo() ? tr("&Redo %1").arg(m_store->redoLabel()) : tr("&Redo"));
+    const TaskStore *st = current().store;
+    m_undo->setEnabled(st->canUndo());
+    m_redo->setEnabled(st->canRedo());
+    m_undo->setText(st->canUndo() ? tr("&Undo %1").arg(st->undoLabel()) : tr("&Undo"));
+    m_redo->setText(st->canRedo() ? tr("&Redo %1").arg(st->redoLabel()) : tr("&Redo"));
 }
 
 void MainWindow::showContextMenu(const QPoint &pos)
@@ -1032,5 +1382,8 @@ void MainWindow::showContextMenu(const QPoint &pos)
     menu.addActions({m_edit, m_replace, m_add, m_addSub, m_delete});
     menu.addSeparator();
     menu.addActions({m_copyList, m_openEditor});
+    menu.addSeparator();
+    menu.addMenu(m_templateMenu);
+    menu.addAction(m_saveTemplate);
     menu.exec(v->viewport()->mapToGlobal(pos));
 }

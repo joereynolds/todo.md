@@ -1,5 +1,6 @@
 #include "dialogs.h"
 
+#include <QButtonGroup>
 #include <QCalendarWidget>
 #include <QCheckBox>
 #include <QComboBox>
@@ -55,6 +56,93 @@ DueDateDialog::DueDateDialog(const QDate &initial, int count, QWidget *parent) :
 QDate DueDateDialog::date() const
 {
     return m_calendar->selectedDate();
+}
+
+namespace {
+enum DueChoice { DueNone, DueToday, DueTomorrow, DueWeek, DueMonth, DuePick };
+const char *const kDueNames[] = {"none", "today", "tomorrow", "week", "month", "pick"};
+} // namespace
+
+AddTaskDialog::AddTaskDialog(const QString &title, const QString &prompt, QWidget *parent) : QDialog(parent)
+{
+    setWindowTitle(title);
+    auto *layout = new QVBoxLayout(this);
+    layout->addWidget(new QLabel(prompt, this));
+    m_text = new QLineEdit(this);
+    m_text->setMinimumWidth(380);
+    layout->addWidget(m_text);
+
+    auto *row = new QHBoxLayout;
+    row->setSpacing(4);
+    row->addWidget(new QLabel(tr("Due:"), this));
+    m_group = new QButtonGroup(this);
+    m_group->setExclusive(true);
+    const QDate today = QDate::currentDate();
+    const std::pair<QString, QDate> choices[] = {
+        {tr("&None"), QDate()},
+        {tr("To&day"), today},
+        {tr("To&morrow"), today.addDays(1)},
+        {tr("Next &week"), today.addDays(7)},
+        {tr("Next m&onth"), today.addMonths(1)},
+        {tr("&Pick…"), QDate()},
+    };
+    for (int id = 0; id < 6; ++id) {
+        auto *b = new QPushButton(choices[id].first, this);
+        b->setCheckable(true);
+        b->setAutoDefault(false); // Enter in the text box accepts the dialog
+        b->setFocusPolicy(Qt::TabFocus);
+        b->setObjectName(QString::fromLatin1(kDueNames[id]));
+        if (choices[id].second.isValid())
+            b->setToolTip(choices[id].second.toString(QStringLiteral("ddd d MMM yyyy")));
+        m_group->addButton(b, id);
+        row->addWidget(b);
+        if (id == DuePick)
+            connect(b, &QPushButton::clicked, this, &AddTaskDialog::pick);
+        else
+            connect(b, &QPushButton::clicked, this, [this, id, d = choices[id].second] { choose(id, d); });
+    }
+    row->addStretch();
+    layout->addLayout(row);
+    m_dueLabel = new QLabel(this);
+    m_dueLabel->setEnabled(false); // dim
+    layout->addWidget(m_dueLabel);
+
+    auto *buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, this);
+    connect(buttons, &QDialogButtonBox::accepted, this, &QDialog::accept);
+    connect(buttons, &QDialogButtonBox::rejected, this, &QDialog::reject);
+    layout->addWidget(buttons);
+    choose(DueNone, QDate());
+    m_text->setFocus();
+}
+
+QString AddTaskDialog::text() const
+{
+    return m_text->text();
+}
+
+QPushButton *AddTaskDialog::dueButton(const QString &name) const
+{
+    return findChild<QPushButton *>(name);
+}
+
+void AddTaskDialog::choose(int id, const QDate &date)
+{
+    m_choice = id;
+    m_due = date;
+    m_group->button(id)->setChecked(true);
+    m_dueLabel->setText(date.isValid() ? tr("Due %1").arg(date.toString(QStringLiteral("dddd d MMMM yyyy")))
+                                       : tr("No due date"));
+}
+
+void AddTaskDialog::pick()
+{
+    DueDateDialog dlg(m_due.isValid() ? m_due : QDate::currentDate(), 1, this);
+    dlg.setWindowTitle(tr("Pick a due date"));
+    if (dlg.exec() == QDialog::Accepted && dlg.date().isValid())
+        choose(DuePick, dlg.date());
+    else
+        m_group->button(m_choice)->setChecked(true); // cancelled: keep the previous choice
+    m_text->setFocus();
 }
 
 ReplaceDialog::ReplaceDialog(int count, QWidget *parent) : QDialog(parent)

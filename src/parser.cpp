@@ -425,6 +425,15 @@ QString setContent(const QString &line, const QString &content)
     return line.left(pl) + content;
 }
 
+QString removeDates(const QString &line, QStringView kinds)
+{
+    int pl, indent;
+    TaskState st;
+    if (!splitTaskLine(line, &pl, &indent, &st))
+        return line;
+    return line.left(pl) + removeTokens(line.mid(pl), dateKinds(kinds));
+}
+
 QString leadingWhitespace(const QString &line)
 {
     qsizetype i = 0;

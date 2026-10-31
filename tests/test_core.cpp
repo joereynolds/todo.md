@@ -1,6 +1,11 @@
 #include "edits.h"
 #include "editor.h"
 #include "parser.h"
+#include "templates.h"
+
+#include <QDir>
+#include <QFile>
+#include <QTemporaryDir>
 
 #include <QTest>
 
@@ -180,6 +185,46 @@ private slots:
         QCOMPARE(f->tasks[3].tags, QStringList({"only"}));
         QCOMPARE(f->tasks[3].text, QString());
         QCOMPARE(f->tasks[3].content, QString("#only"));
+    }
+
+    void listTemplates()
+    {
+        // Saving: todo, dates gone, ETA and tags kept, indented by selected nesting.
+        auto f = parser::parse("/a.md", "a.md",
+                               "  - [x] Seeing GF !2026-11-01 +2026-10-01 x2026-10-02 #gf\n"
+                               "    * [/] Trim nails ~5m\n"
+                               "    - [-] Cut hair -2026-10-03\n"
+                               "      - [ ] Book barber\n");
+        auto &t = f->tasks;
+        QCOMPARE(templates::fromTasks({&t[0], &t[1], &t[2], &t[3]}),
+                 QStringList({"- [ ] Seeing GF #gf", "  * [ ] Trim nails ~5m", "  - [ ] Cut hair", "    - [ ] Book barber"}));
+        QCOMPARE(templates::fromTasks({&t[1], &t[3]}), QStringList({"* [ ] Trim nails ~5m", "- [ ] Book barber"}));
+
+        // Inserting: re-indented under `lead`, todo, created today, non-task lines dropped.
+        const QDate today(2026, 10, 31);
+        const QByteArray file = "# Seeing GF\n- [ ] Trim nails ~5m\n- [x] Cut hair +2020-01-01 x2020-01-02\n"
+                                "  - [ ] Book barber !2026-12-01\nnotes here\n";
+        QCOMPARE(templates::instantiate(file, "\t", "\t", today),
+                 QStringList({"\t- [ ] Trim nails ~5m +2026-10-31", "\t- [ ] Cut hair +2026-10-31",
+                              "\t\t- [ ] Book barber !2026-12-01 +2026-10-31"}));
+        QCOMPARE(templates::instantiate("just text\n", "", "  ", today), QStringList());
+
+        QVERIFY(templates::isValidName("seeing-gf"));
+        QVERIFY(!templates::isValidName(".hidden") && !templates::isValidName("a/b") && !templates::isValidName(" "));
+
+        // Where templates live, listing, saving.
+        QTemporaryDir a, b;
+        QCOMPARE(templates::dirFor({}), QString());
+        QCOMPARE(templates::dirFor({a.path(), b.path()}), a.path() + "/.templates");
+        QDir().mkpath(b.path() + "/.templates");
+        QCOMPARE(templates::dirFor({a.path(), b.path()}), b.path() + "/.templates"); // the one that exists
+        const QString dir = templates::dirFor({a.path()});
+        QVERIFY(templates::save(templates::pathFor(dir, "Zebra"), {"- [ ] z"}));
+        QVERIFY(templates::save(templates::pathFor(dir, "apple"), {"- [ ] a", "  - [ ] b"}));
+        QCOMPARE(templates::names(dir), QStringList({"apple", "Zebra"}));
+        QFile saved(templates::pathFor(dir, "apple"));
+        QVERIFY(saved.open(QIODevice::ReadOnly));
+        QCOMPARE(saved.readAll(), QByteArray("- [ ] a\n  - [ ] b\n"));
     }
 
     void depth()
