@@ -5,7 +5,9 @@
 
 class QCalendarWidget;
 class QCheckBox;
+class QComboBox;
 class QLineEdit;
+class QSpinBox;
 
 class DueDateDialog : public QDialog
 {
@@ -32,4 +34,22 @@ public:
 private:
     QLineEdit *m_find, *m_replace;
     QCheckBox *m_regex, *m_case;
+};
+
+// Picks an ETA as a number and a unit. eta() is e.g. "15m", or empty when
+// "Remove" was chosen.
+class EtaDialog : public QDialog
+{
+    Q_OBJECT
+public:
+    EtaDialog(const QString &current, int count, QWidget *parent = nullptr);
+    QString eta() const { return m_result; }
+
+private:
+    void set(int amount, QChar unit);
+    QString value() const;
+
+    QSpinBox *m_amount;
+    QComboBox *m_unit;
+    QString m_result;
 };

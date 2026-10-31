@@ -10,8 +10,9 @@
 #include <optional>
 #include <vector>
 
-class AgendaFilterProxy;
 class AgendaModel;
+class QSplitter;
+class Sidebar;
 class QAction;
 class QActionGroup;
 class QCheckBox;
@@ -47,9 +48,6 @@ private:
     struct Pane {
         QTreeView *view = nullptr;
         TaskModelBase *model = nullptr;
-        AgendaFilterProxy *proxy = nullptr; // agenda only; the task list filters itself
-        QModelIndex toSource(const QModelIndex &i) const;
-        QModelIndex fromSource(const QModelIndex &i) const;
     };
     struct LineKey {
         QString path;
@@ -63,7 +61,7 @@ private:
 
     void buildActions();
     void buildUi();
-    QTreeView *makeView();
+    QTreeView *makeView(bool tree);
     Pane &current();
     const Pane &current() const;
 
@@ -76,6 +74,7 @@ private:
 
     void setState(TaskState state);
     void toggleDone();
+    void toggleTask(Task *task);
     void setDue();
     void clearDue();
     void setEta();
@@ -88,7 +87,6 @@ private:
     void applyFilter();
     void forEachFilter(const std::function<void(TaskFilter &)> &fn);
     void applyTheme(const QString &name);
-    void refreshAgendaView();
     void updateStatus();
     void updateTitle();
     void updateUndoActions();
@@ -102,6 +100,8 @@ private:
     std::optional<std::vector<LineKey>> m_forceSelect;
 
     QTabWidget *m_tabs = nullptr;
+    QSplitter *m_splitter = nullptr;
+    Sidebar *m_sidebar = nullptr;
     QLineEdit *m_filter = nullptr;
     QComboBox *m_etaFilter = nullptr;
     QLabel *m_status = nullptr;
@@ -116,7 +116,7 @@ private:
     QAction *m_due, *m_clearDue, *m_eta, *m_edit, *m_replace, *m_add, *m_addSub, *m_delete;
     QAction *m_openEditor;
     QAction *m_showState[4];
-    QAction *m_focusFilter, *m_focusFilter2, *m_tasksTab, *m_agendaTab;
+    QAction *m_focusFilter, *m_focusFilter2, *m_tasksTab, *m_agendaTab, *m_expandAll, *m_collapseAll, *m_toggleSidebar;
     QActionGroup *m_themeGroup;
 
     qint64 m_lastLoadMs = -1;

@@ -18,7 +18,6 @@ int main(int argc, char *argv[])
     QApplication::setApplicationVersion(QStringLiteral(TODOMD_VERSION));
 
     theme::init();
-    theme::apply(theme::fromString(QSettings().value(QStringLiteral("view/theme"), QStringLiteral("dark")).toString()));
 
     QCommandLineParser cli;
     cli.setApplicationDescription(QStringLiteral("Manage markdown tasks found recursively in directories."));
@@ -36,7 +35,15 @@ int main(int argc, char *argv[])
     cli.addOption(shot);
     QCommandLineOption tab(QStringLiteral("tab"), QStringLiteral("Tab to show: tasks or agenda."), QStringLiteral("name"));
     cli.addOption(tab);
+    QCommandLineOption themeOpt(QStringLiteral("theme"),
+                                QStringLiteral("Theme for this run only: light, soft, dark or system."),
+                                QStringLiteral("name"));
+    cli.addOption(themeOpt);
     cli.process(app);
+
+    theme::apply(theme::fromString(cli.isSet(themeOpt)
+                                       ? cli.value(themeOpt)
+                                       : QSettings().value(QStringLiteral("view/theme"), QStringLiteral("light")).toString()));
 
     const QStringList given = cli.positionalArguments();
     for (const QString &d : given) {

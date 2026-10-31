@@ -16,15 +16,19 @@ cmake -S . -B build -G Ninja          # Release by default
 cmake --build build
 ./build/todomd                        # remembered directories
 ./build/todomd ~/notes ~/work         # also adds these to the remembered list
-cd build && ctest --output-on-failure # tests run with QT_QPA_PLATFORM=offscreen
+cd build && ctest --output-on-failure # offscreen; 60 s timeout each (a test that waits on a
+                                      # modal dialog that never appears would otherwise hang)
 
 # Headless checks (only the given dirs; nothing is persisted):
 QT_QPA_PLATFORM=offscreen ./build/todomd --bench DIR...
-QT_QPA_PLATFORM=offscreen ./build/todomd --screenshot out.png [--tab agenda] DIR...
+QT_QPA_PLATFORM=offscreen ./build/todomd --screenshot out.png [--tab agenda] [--theme soft] DIR...
+# Screenshots read the real settings (filters, collapse state). Isolate them with
+# XDG_CONFIG_HOME=/some/dir, and put a todomd/todomd.conf there to set filters.
 ```
 
 Perf baseline (200k tasks / 5,000 files, generated corpus, every row visible):
-scan+parse ≈ 50 ms, first paint ≈ 85 ms total. A filter change takes 10–70 ms (the
+scan+parse ≈ 50 ms, first paint ≈ 120 ms total (the list, the agenda with subtasks, and
+the sidebar all build up front). A filter change takes 10–70 ms (the
 free-text `contains` is the slowest). Re-run `--bench` after touching the load or list paths.
 
 ## Layout
@@ -36,10 +40,12 @@ free-text `contains` is the slowest). Re-run `--bench` after touching the load o
 | `src/edits.*` | `Edit` (range of lines: expected `before`, replacement `after`), `LineBuffer` (preserves CRLF / trailing newline), `applyEdits()`, which also returns the inverse edits for undo. |
 | `src/editor.*` | Builds the command for "Open in editor" from `$EDITOR` (pure `editor::build`, unit tested). |
 | `src/store.*` | `TaskStore`: several roots, async load (thread pool), `QFileSystemWatcher` sync, the **only** writer to disk, undo/redo. |
-| `src/models.*` | `TaskFilter` (state / text / ETA), `TaskListModel` (flat list with built-in filtering), `AgendaModel` + `AgendaFilterProxy`. |
-| `src/theme.*` | Dark (default) / Light / System. Fusion style + palette. |
-| `src/mainwindow.*` | Toolbar, tabs, actions and shortcuts, bulk ops, selection/scroll preservation, `IndentDelegate`. |
-| `src/dialogs.*` | Due-date picker, find/replace. |
+| `src/models.*` | `TaskFilter` (state / words / ETA / `due:` / `is:`), `TaskColors`, `FlatTaskModel` (tree as a flat list: groups, filtering, collapse) with `TaskListModel` (group = file) and `AgendaModel` (group = day; single-day mode for the sidebar). |
+| `src/dialogs.*` | Due-date picker, find/replace, ETA picker (number + unit + presets). |
+| `src/theme.*` | Light (default) / Soft (grey light) / Dark / System. Fusion style + palette. |
+| `src/taskview.*` | `TaskDelegate` (draws checkbox, chevron, guides, header band, progress pill) and `TaskView` (chevron/checkbox clicks, Left/Right keys, optional header spans). |
+| `src/sidebar.*` | `Sidebar`: stat tiles (click = filter), `TaskCalendar` (dots on due days), single-day `AgendaModel` list. |
+| `src/mainwindow.*` | Toolbar, tabs, actions and shortcuts, bulk ops, selection/scroll preservation. |
 | `tests/` | `test_core` (parser, edits, ETA, editor command), `test_store` (store + models under `QAbstractItemModelTester`, real temp dirs and watcher, multiple roots), `test_window` (drives shortcuts on the real window). |
 
 CMake targets: `todocore` (parser, edits, editor; Qt Core only) → `todoapp` (store,
@@ -89,30 +95,84 @@ hold raw `Task*`, which a change invalidates. The window connects to `aboutToCha
 `runEdits(..., select)` overrides the restored selection (new task selected, nothing
 after a delete). `test_store` runs `QAbstractItemModelTester` in fatal mode.
 
-Why a flat list and not a tree: the user wants subtasks always visible, never
-collapsible. A tree proxy plus `expandAll` cost ~140 ms at 200k rows, and the
-collapse-by-default design looked "sporadic". `TaskListModel::rebuild` does one
-reverse pass per file, so a matching task keeps its ancestors visible. It emits a
-header row per file, then visible tasks with `DepthRole = depth + 1`. `IndentDelegate`
-indents column 0 by depth and draws a faint guide line under each ancestor.
+### Task list and agenda: trees drawn as flat lists (`FlatTaskModel`)
+
+History: a QTreeView + QSortFilterProxyModel tree cost ~140 ms for `expandAll` at 200k
+rows, and starting collapsed looked "sporadic" to the user. Round 2 asked for subtasks
+always shown; round 3 brought the tree back with collapsible subtasks *and* files;
+round 4 asked for the same in the agenda. Both views now share `FlatTaskModel`:
+
+- A subclass supplies groups (`collectGroups`): a key, a header, and root tasks. The
+  list makes one group per file (roots = top-level tasks). The agenda makes one group
+  per day (roots = open tasks due that day, minus any whose ancestor is already a root
+  that day). Headers come from `groupData`, task cells from `taskRowData`.
+- Rows are a header (`depth 0`) followed by a depth-first walk of the roots and all
+  subtasks. A task is visible if it matches the filter or has a visible descendant,
+  so ancestors of matches stay as context. When the filter shows everything, a fast
+  path skips the matching.
+- A node's descendants are always a contiguous run of rows below it, so collapse is
+  one `beginRemoveRows`, and expand regenerates that group's rows and inserts the run.
+  No reset, so selection and scroll survive.
+- Everything is expanded by default. Collapse keys are the group key (file path /
+  `day:YYYY-MM-DD`) or path + `\x1f` + task text. They survive store changes and are
+  saved to `view/collapsed` / `view/agendaCollapsed`. While the filter narrows, a
+  temporary set is used so matches inside collapsed nodes still show.
+- Row lookup: the list uses `Task::listRow`, which is fast at 200k. The agenda uses a
+  hash, because a task can appear under more than one day.
+- `TaskView` handles chevron/checkbox presses before QTreeView sees them, so the
+  selection isn't touched. Left/Right collapse, expand or move to parent/child, and
+  double-clicking a header toggles it. `TaskDelegate::layoutFor` is the single source
+  of hit-test and paint geometry. The agenda and sidebar views span header rows across
+  all columns (`setSpanHeaders`, which walks the rows on each reset, so not for the list).
+
+### Sidebar
+
+`QSplitter` [sidebar | tabs]. It can be hidden with Ctrl+B / the toolbar button, or
+dragged shut (which unchecks the action). The state is saved (`view/sidebar`,
+`view/splitter`). From the top (order requested by the user):
+
+- **Calendar:** dots under days with open due tasks (one per task, max 3), red if
+  overdue and amber today. Weekends are neutral and the navigation bar is restyled,
+  because Qt's red weekends and blue bar clashed with the colour meanings.
+- **Day list** (stretches): a single-day `AgendaModel` for the selected date. The
+  checkbox toggles the task; double-click reveals it in the Tasks tab
+  (`TaskListModel::reveal` expands its file and ancestors). It follows the toolbar's
+  state toggles but not the filter text.
+- **Filters:** compact, deliberately neutral (the user asked for less colour) one-line
+  tiles: overdue, due today, next 7 days, in progress, quick (≤ 2m), done today. Each
+  except done-today sets the filter box to its term, and clicking again clears it. The
+  active one is outlined.
+
+Day header wording (`AgendaModel::groupData`): today / tomorrow / "in N days" /
+"N days overdue" only within ±14 days, otherwise just the date. A past day with no open
+tasks says "N days ago" rather than "overdue". This was a reported bug: an empty past
+day in the sidebar read "174 days overdue".
 
 ## UI behaviour
 
+- Task rows show a drawn checkbox instead of `[ ]`: empty = todo, blue inner square =
+  in progress, green tick = done, grey × = cancelled. Clicking it toggles done ↔ todo
+  for that task and its subtasks. Parents and file headers show `done/total` in a small
+  pill (green when complete). Header rows (files, agenda days) have a tinted band.
+  Colours come from `TaskColors::fromPalette`, so they follow the theme.
 - **Bulk actions always include subtasks** (the user asked for no toggle).
   Marking a parent done/cancelled/etc. applies to all descendants, as do due date,
   ETA, replace and delete. Toggle-done decides done vs todo from the selected rows only.
 - Agenda: open (todo / in progress) tasks with `!due`, one header row per day. Overdue in
   red, today in orange. "Show empty days" fills today → last due date (min 2 weeks, max 1 year).
-- Filter box: space-separated terms, all must match the raw content or file path. Terms
-  starting with `~` are ETA conditions: `~<=15m ~<1h ~>2h ~>=1d ~30m ~none ~any`. The
+- Filter box: space-separated terms, all must match. Plain words match the raw content
+  or file path. Terms starting with `~` are ETA conditions:
+  `~<=15m ~<1h ~>2h ~>=1d ~30m ~none ~any`. `due:overdue|today|week|none|any` and
+  `is:todo|doing|done|cancelled|open` filter by date and state. The
   toolbar ETA dropdown adds a preset on top: ≤2m (GTD "do it now"), ≤15m, ≤1h, 1h–1d,
   >1d, has/no ETA. ETAs ≤ 2m are shown in green.
 - Selection is `ExtendedSelection` + `SelectRows`: click-drag, shift and ctrl all work.
 - Shortcuts: Space toggle done · X done · P in progress · T todo · C cancelled ·
-  D due date · Shift+D clear due · ~ set ETA · F2/double-click edit (multi-select →
+  D due date · Shift+D clear due · ~ set ETA (number + unit dialog) · Ctrl+B sidebar · F2/double-click edit (multi-select →
   replace dialog) · Ctrl+H find/replace · N add task below · Shift+N add subtask · Del delete ·
   E open in `$EDITOR` · Ctrl+F or / filter (Esc clears, ↓ back to list) ·
-  Alt+1..4 show todo/doing/done/cancelled · Ctrl+1/2 tabs · Ctrl+Z / Ctrl+Shift+Z undo/redo ·
+  Alt+1..4 show todo/doing/done/cancelled · Ctrl+1/2 tabs · ←/→ collapse/expand ·
+  Ctrl+. expand all · Ctrl+, collapse all groups (current tab) · Ctrl+Z / Ctrl+Shift+Z undo/redo ·
   Ctrl+O add directory · F5 reload.
   Single-key shortcuts are window-wide. `QLineEdit` eats printable keys via
   ShortcutOverride, so typing in the filter or the inline editor is safe. `~` is bound
@@ -124,7 +184,9 @@ indents column 0 by depth and draws a faint guide line under each ancestor.
   launcher that doesn't inherit the shell environment, `$EDITOR` may be missing.
 - Settings live in `QSettings("todomd", "todomd")` (`~/.config/todomd/todomd.conf`):
   `directories` (list; migrated from the old `lastDirectory`), geometry, tab, state
-  filters (done and cancelled hidden by default), `view/theme`, `agenda/emptyDays`.
+  filters (done and cancelled hidden by default), `view/theme` (default `light`; the user
+  has `system` saved), `view/collapsed`, `view/agendaCollapsed`, `view/sidebar`,
+  `view/splitter`, `agenda/emptyDays`.
 
 ## File watching
 

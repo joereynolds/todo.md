@@ -28,6 +28,8 @@ add_library(todoapp STATIC
     src/models.h src/models.cpp
     src/dialogs.h src/dialogs.cpp
     src/theme.h src/theme.cpp
+    src/taskview.h src/taskview.cpp
+    src/sidebar.h src/sidebar.cpp
     src/mainwindow.h src/mainwindow.cpp
 )
 target_link_libraries(todoapp PUBLIC todocore Qt6::Widgets PRIVATE Qt6::Concurrent)
@@ -43,11 +45,12 @@ if(TODOMD_BUILD_TESTS)
     qt_add_executable(test_core tests/test_core.cpp)
     target_link_libraries(test_core PRIVATE todocore Qt6::Test)
     add_test(NAME test_core COMMAND test_core)
+    set_tests_properties(test_core PROPERTIES TIMEOUT 60)
     foreach(t test_store test_window)
         qt_add_executable(${t} tests/${t}.cpp)
         target_link_libraries(${t} PRIVATE todoapp Qt6::Test)
         add_test(NAME ${t} COMMAND ${t})
-        set_tests_properties(${t} PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+        set_tests_properties(${t} PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen" TIMEOUT 60)
     endforeach()
 endif()
 

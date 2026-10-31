@@ -190,8 +190,9 @@ void TaskStore::endChange()
     }
 }
 
-void TaskStore::setRoots(const QStringList &roots)
+void TaskStore::setRoots(const QStringList &rootsIn)
 {
+    const QStringList roots = rootsIn; // may alias m_roots (reload)
     m_roots.clear();
     for (const QString &r : roots) {
         const QString n = normalizeRoot(r);

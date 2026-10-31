@@ -4,7 +4,9 @@
 #include "editor.h"
 #include "models.h"
 #include "parser.h"
+#include "sidebar.h"
 #include "store.h"
+#include "taskview.h"
 #include "theme.h"
 
 #include <QAction>
@@ -25,13 +27,12 @@
 #include <QMenu>
 #include <QMenuBar>
 #include <QMessageBox>
-#include <QPainter>
 #include <QProcess>
 #include <QRegularExpression>
 #include <QScrollBar>
 #include <QSettings>
+#include <QSplitter>
 #include <QStatusBar>
-#include <QStyledItemDelegate>
 #include <QTabWidget>
 #include <QToolBar>
 #include <QTreeView>
@@ -72,62 +73,6 @@ protected:
 private:
     QLineEdit *m_edit;
     std::function<QTreeView *()> m_view;
-};
-
-// Indents column 0 of the flat task list by DepthRole, with a faint guide
-// line under each ancestor so subtasks read as belonging to their parent.
-class IndentDelegate : public QStyledItemDelegate
-{
-public:
-    using QStyledItemDelegate::QStyledItemDelegate;
-    static constexpr int kStep = 20;
-
-    static int offset(const QModelIndex &index)
-    {
-        return index.column() == 0 ? index.data(TaskModelBase::DepthRole).toInt() * kStep : 0;
-    }
-
-    void paint(QPainter *p, const QStyleOptionViewItem &option, const QModelIndex &index) const override
-    {
-        const int depth = index.column() == 0 ? index.data(TaskModelBase::DepthRole).toInt() : 0;
-        if (depth == 0) {
-            QStyledItemDelegate::paint(p, option, index);
-            return;
-        }
-        // Background and selection across the whole cell...
-        QStyleOptionViewItem bg(option);
-        initStyleOption(&bg, index);
-        bg.text.clear();
-        bg.icon = QIcon();
-        const QWidget *w = option.widget;
-        (w ? w->style() : QApplication::style())->drawControl(QStyle::CE_ItemViewItem, &bg, p, w);
-        // ...a guide under each ancestor (level 0 is the file header)...
-        p->save();
-        QColor c = option.palette.color(QPalette::Disabled, QPalette::Text);
-        c.setAlpha(120);
-        p->setPen(c);
-        for (int k = 1; k < depth; ++k) {
-            const int x = option.rect.left() + k * kStep + 6;
-            p->drawLine(x, option.rect.top(), x, option.rect.bottom());
-        }
-        p->restore();
-        // ...then the content, shifted.
-        QStyleOptionViewItem shifted(option);
-        shifted.rect.setLeft(option.rect.left() + depth * kStep);
-        QStyledItemDelegate::paint(p, shifted, index);
-    }
-
-    QSize sizeHint(const QStyleOptionViewItem &option, const QModelIndex &index) const override
-    {
-        return QStyledItemDelegate::sizeHint(option, index) + QSize(offset(index), 0);
-    }
-
-    void updateEditorGeometry(QWidget *editor, const QStyleOptionViewItem &option,
-                              const QModelIndex &index) const override
-    {
-        QStyledItemDelegate::updateEditorGeometry(editor, option, index);
-        editor->setGeometry(editor->geometry().adjusted(offset(index), 0, 0, 0));
-    }
 };
 
 Task *lastDescendant(Task *t)
@@ -174,16 +119,6 @@ const std::vector<EtaPreset> &etaPresets()
 
 } // namespace
 
-QModelIndex MainWindow::Pane::toSource(const QModelIndex &i) const
-{
-    return proxy ? proxy->mapToSource(i) : i;
-}
-
-QModelIndex MainWindow::Pane::fromSource(const QModelIndex &i) const
-{
-    return proxy ? proxy->mapFromSource(i) : i;
-}
-
 MainWindow::MainWindow(TaskStore *store, QWidget *parent) : QMainWindow(parent), m_store(store)
 {
     // Connected before the models exist, so this runs while their rows are
@@ -197,8 +132,7 @@ MainWindow::MainWindow(TaskStore *store, QWidget *parent) : QMainWindow(parent),
     m_agendaModel = new AgendaModel(store, this);
     m_list.model = m_listModel;
     m_agenda.model = m_agendaModel;
-    m_agenda.proxy = new AgendaFilterProxy(this);
-    m_agenda.proxy->setSourceModel(m_agendaModel);
+    m_sidebar = new Sidebar(store, this);
 
     buildActions();
     buildUi();
@@ -211,7 +145,6 @@ MainWindow::MainWindow(TaskStore *store, QWidget *parent) : QMainWindow(parent),
             s.current = m_forceSelect->empty() ? std::nullopt : std::optional<LineKey>(m_forceSelect->front());
             m_forceSelect.reset();
         }
-        refreshAgendaView();
         restoreView(m_list, m_saved[0], forced);
         restoreView(m_agenda, m_saved[1], forced);
         updateStatus();
@@ -223,7 +156,6 @@ MainWindow::MainWindow(TaskStore *store, QWidget *parent) : QMainWindow(parent),
                     runEdits({{path, line, {before}, {after}}}, tr("Edit task"));
                 }, Qt::QueuedConnection);
     }
-    connect(m_agendaModel, &QAbstractItemModel::modelReset, this, &MainWindow::refreshAgendaView);
 
     connect(store, &TaskStore::undoStateChanged, this, &MainWindow::updateUndoActions);
     connect(store, &TaskStore::message, this, [this](const QString &m) { statusBar()->showMessage(m, 6000); });
@@ -251,6 +183,11 @@ MainWindow::MainWindow(TaskStore *store, QWidget *parent) : QMainWindow(parent),
     m_clock.start();
 
     QSettings s;
+    m_listModel->setCollapsedKeys(s.value(QStringLiteral("view/collapsed")).toStringList());
+    m_agendaModel->setCollapsedKeys(s.value(QStringLiteral("view/agendaCollapsed")).toStringList());
+    m_splitter->restoreState(s.value(QStringLiteral("view/splitter")).toByteArray());
+    m_toggleSidebar->setChecked(s.value(QStringLiteral("view/sidebar"), true).toBool());
+    m_sidebar->setVisible(m_toggleSidebar->isChecked());
     restoreGeometry(s.value(QStringLiteral("window/geometry")).toByteArray());
     m_tabs->setCurrentIndex(s.value(QStringLiteral("window/tab"), 0).toInt());
     updateUndoActions();
@@ -265,6 +202,9 @@ void MainWindow::closeEvent(QCloseEvent *event)
     QSettings s;
     s.setValue(QStringLiteral("window/geometry"), saveGeometry());
     s.setValue(QStringLiteral("window/tab"), m_tabs->currentIndex());
+    s.setValue(QStringLiteral("view/collapsed"), m_listModel->collapsedKeys());
+    s.setValue(QStringLiteral("view/agendaCollapsed"), m_agendaModel->collapsedKeys());
+    s.setValue(QStringLiteral("view/splitter"), m_splitter->saveState());
     QMainWindow::closeEvent(event);
 }
 
@@ -312,26 +252,46 @@ void MainWindow::buildActions()
         m_showState[i] = make(tr(names[i]), QKeySequence(Qt::ALT | (Qt::Key_1 + i)), [this, state, key](bool on) {
             QSettings().setValue(key, on);
             forEachFilter([&](TaskFilter &f) { f.setStateVisible(state, on); });
+            m_sidebar->setStateVisible(state, on);
         });
         m_showState[i]->setCheckable(true);
         const bool on = s.value(key, defaults[i]).toBool();
         m_showState[i]->setChecked(on);
+        m_sidebar->setStateVisible(state, on);
         m_listModel->filter().setStateVisible(state, on);
-        m_agenda.proxy->filter().setStateVisible(state, on);
+        m_agendaModel->filter().setStateVisible(state, on);
         m_showState[i]->setToolTip(tr("Show %1 tasks (Alt+%2)").arg(tr(names[i]).toLower()).arg(i + 1));
     }
     m_listModel->refilter();
-    m_agenda.proxy->refilter();
+    m_agendaModel->refilter();
 
     m_focusFilter = make(tr("&Filter"), QKeySequence::Find, [this] { m_filter->setFocus(); m_filter->selectAll(); });
     m_focusFilter2 = make(tr("Filter"), QKeySequence(Qt::Key_Slash), [this] { m_filter->setFocus(); m_filter->selectAll(); });
+    m_expandAll = make(tr("E&xpand all"), QKeySequence(Qt::CTRL | Qt::Key_Period), [this] {
+        Pane &p = current();
+        const SavedView v = saveView(p);
+        static_cast<FlatTaskModel *>(p.model)->expandAll();
+        restoreView(p, v, true);
+    });
+    m_collapseAll = make(tr("&Collapse all groups"), QKeySequence(Qt::CTRL | Qt::Key_Comma), [this] {
+        static_cast<FlatTaskModel *>(current().model)->collapseAll();
+    });
+    m_toggleSidebar = make(tr("&Sidebar"), QKeySequence(Qt::CTRL | Qt::Key_B), [this](bool on) {
+        m_sidebar->setVisible(on);
+        if (on && m_splitter->sizes().value(0) == 0)
+            m_splitter->setSizes({300, std::max(400, width() - 300)});
+        QSettings().setValue(QStringLiteral("view/sidebar"), on);
+    });
+    m_toggleSidebar->setCheckable(true);
+    m_toggleSidebar->setToolTip(tr("Show or hide the sidebar (Ctrl+B)"));
     m_tasksTab = make(tr("&Tasks"), QKeySequence(Qt::CTRL | Qt::Key_1), [this] { m_tabs->setCurrentIndex(0); });
     m_agendaTab = make(tr("&Agenda"), QKeySequence(Qt::CTRL | Qt::Key_2), [this] { m_tabs->setCurrentIndex(1); });
 
     m_themeGroup = new QActionGroup(this);
-    const QString current = s.value(QStringLiteral("view/theme"), QStringLiteral("dark")).toString();
-    for (const auto &[name, label] : {std::pair{QStringLiteral("dark"), tr("&Dark")},
-                                      std::pair{QStringLiteral("light"), tr("&Light")},
+    const QString current = s.value(QStringLiteral("view/theme"), QStringLiteral("light")).toString();
+    for (const auto &[name, label] : {std::pair{QStringLiteral("light"), tr("&Light")},
+                                      std::pair{QStringLiteral("soft"), tr("S&oft (grey light)")},
+                                      std::pair{QStringLiteral("dark"), tr("&Dark")},
                                       std::pair{QStringLiteral("system"), tr("&System")}}) {
         QAction *a = m_themeGroup->addAction(label);
         a->setCheckable(true);
@@ -340,9 +300,14 @@ void MainWindow::buildActions()
     }
 }
 
-QTreeView *MainWindow::makeView()
+QTreeView *MainWindow::makeView(bool tree)
 {
-    auto *v = new QTreeView(this);
+    auto *v = new TaskView(tree, this);
+    connect(v, &TaskView::checkClicked, this, [this, v](const QModelIndex &index) {
+        const Pane &p = v == m_agenda.view ? m_agenda : m_list;
+        if (Task *t = p.model->taskAt(index))
+            toggleTask(t);
+    });
     v->setUniformRowHeights(true); // large win for big lists
     v->setSelectionMode(QAbstractItemView::ExtendedSelection); // click-drag, shift, ctrl
     v->setSelectionBehavior(QAbstractItemView::SelectRows);
@@ -385,11 +350,13 @@ void MainWindow::buildUi()
     edit->addAction(m_openEditor);
 
     QMenu *view = menuBar()->addMenu(tr("&View"));
-    view->addActions({m_tasksTab, m_agendaTab});
+    view->addActions({m_toggleSidebar, m_tasksTab, m_agendaTab});
     view->addSeparator();
     view->addAction(m_focusFilter);
     for (QAction *a : m_showState)
         view->addAction(a);
+    view->addSeparator();
+    view->addActions({m_expandAll, m_collapseAll});
     view->addSeparator();
     QMenu *themes = view->addMenu(tr("T&heme"));
     themes->addActions(m_themeGroup->actions());
@@ -398,12 +365,14 @@ void MainWindow::buildUi()
     bar->setObjectName(QStringLiteral("main"));
     bar->setMovable(false);
     bar->setToolButtonStyle(Qt::ToolButtonTextOnly);
-    bar->addActions({m_addDir, m_reload});
+    bar->addActions({m_toggleSidebar, m_addDir, m_reload});
     bar->addSeparator();
     m_filter = new QLineEdit(this);
     m_filter->setPlaceholderText(tr("Filter: words, paths, !2026-11, ~<=15m …  (Ctrl+F or /)"));
     m_filter->setToolTip(tr("Space separated terms, all must match.\n"
-                            "ETA: ~<=15m  ~<1h  ~>2h  ~>=1d  ~30m  ~none  ~any"));
+                            "ETA: ~<=15m  ~<1h  ~>2h  ~>=1d  ~30m  ~none  ~any\n"
+                            "Due: due:overdue  due:today  due:week  due:none  due:any\n"
+                            "State: is:todo  is:doing  is:done  is:cancelled  is:open"));
     m_filter->setClearButtonEnabled(true);
     m_filter->setMinimumWidth(220);
     m_filter->installEventFilter(new FilterKeys(m_filter, [this] { return current().view; }));
@@ -422,9 +391,8 @@ void MainWindow::buildUi()
     for (QAction *a : m_showState)
         bar->addAction(a);
 
-    m_list.view = makeView();
+    m_list.view = makeView(true);
     m_list.view->setModel(m_listModel);
-    m_list.view->setItemDelegate(new IndentDelegate(m_list.view));
     const int dateWidth = fontMetrics().horizontalAdvance(QStringLiteral("0000-00-00")) + 24;
     const int etaWidth = fontMetrics().horizontalAdvance(QStringLiteral("ETA 999m")) + 12;
     QHeaderView *h = m_list.view->header();
@@ -435,16 +403,16 @@ void MainWindow::buildUi()
     h->resizeSection(TaskListModel::EtaColumn, etaWidth);
     h->resizeSection(TaskListModel::DueColumn, dateWidth);
 
-    m_agenda.view = makeView();
-    m_agenda.view->setModel(m_agenda.proxy);
-    m_agenda.view->setIndentation(IndentDelegate::kStep);
+    m_agenda.view = makeView(true);
+    m_agenda.view->setModel(m_agendaModel);
+    static_cast<TaskView *>(m_agenda.view)->setSpanHeaders(true);
     h = m_agenda.view->header();
     h->setStretchLastSection(false);
     h->setSectionResizeMode(AgendaModel::TextColumn, QHeaderView::Stretch);
     h->setSectionResizeMode(AgendaModel::EtaColumn, QHeaderView::Fixed);
     h->setSectionResizeMode(AgendaModel::FileColumn, QHeaderView::Interactive);
     h->resizeSection(AgendaModel::EtaColumn, etaWidth);
-    h->resizeSection(AgendaModel::FileColumn, 260);
+    h->resizeSection(AgendaModel::FileColumn, 200);
 
     auto *agendaPage = new QWidget(this);
     auto *agendaLayout = new QVBoxLayout(agendaPage);
@@ -472,7 +440,41 @@ void MainWindow::buildUi()
     m_tabs->addTab(m_list.view, tr("Tasks"));
     m_tabs->addTab(agendaPage, tr("Agenda"));
     connect(m_tabs, &QTabWidget::currentChanged, this, [this] { current().view->setFocus(); });
-    setCentralWidget(m_tabs);
+
+    m_splitter = new QSplitter(Qt::Horizontal, this);
+    m_splitter->addWidget(m_sidebar);
+    m_splitter->addWidget(m_tabs);
+    m_splitter->setCollapsible(0, true);
+    m_splitter->setCollapsible(1, false);
+    m_splitter->setStretchFactor(0, 0);
+    m_splitter->setStretchFactor(1, 1);
+    m_splitter->setSizes({300, 700});
+    connect(m_splitter, &QSplitter::splitterMoved, this, [this] {
+        // Dragged shut counts as hidden.
+        const bool shown = m_splitter->sizes().value(0) > 0;
+        if (shown != m_toggleSidebar->isChecked()) {
+            m_toggleSidebar->setChecked(shown);
+            QSettings().setValue(QStringLiteral("view/sidebar"), shown);
+        }
+    });
+    setCentralWidget(m_splitter);
+
+    connect(m_sidebar, &Sidebar::filterRequested, this, [this](const QString &text) {
+        m_filter->setText(text);
+        m_filterTimer.stop();
+        forEachFilter([&](TaskFilter &f) { f.setText(text); });
+    });
+    connect(m_sidebar, &Sidebar::toggleRequested, this, &MainWindow::toggleTask);
+    connect(m_sidebar, &Sidebar::taskActivated, this, [this](Task *t) {
+        m_tabs->setCurrentIndex(0);
+        const QModelIndex i = m_listModel->reveal(t);
+        if (!i.isValid()) {
+            statusBar()->showMessage(tr("That task is hidden by the current filter"), 4000);
+            return;
+        }
+        restoreView(m_list, {{{t->file->path, t->line}}, LineKey{t->file->path, t->line}, 0}, true);
+        m_list.view->setFocus();
+    });
 
     m_status = new QLabel(this);
     statusBar()->addPermanentWidget(m_status);
@@ -536,7 +538,7 @@ void MainWindow::chooseDirectory()
 void MainWindow::forEachFilter(const std::function<void(TaskFilter &)> &fn)
 {
     fn(m_listModel->filter());
-    fn(m_agenda.proxy->filter());
+    fn(m_agendaModel->filter());
     applyFilter();
 }
 
@@ -544,8 +546,8 @@ void MainWindow::applyFilter()
 {
     const SavedView list = saveView(m_list), agenda = saveView(m_agenda);
     m_listModel->refilter();
-    m_agenda.proxy->refilter();
-    refreshAgendaView();
+    m_agendaModel->refilter();
+    m_sidebar->setActiveFilter(m_filter->text());
     restoreView(m_list, list, true);
     restoreView(m_agenda, agenda, true);
 }
@@ -573,7 +575,7 @@ std::vector<Task *> MainWindow::selectedTasks(bool withSubtasks) const
         }
     };
     for (const QModelIndex &pi : rows) {
-        if (Task *t = p.model->taskAt(p.toSource(pi)))
+        if (Task *t = p.model->taskAt(pi))
             add(t);
     }
     return out;
@@ -582,7 +584,7 @@ std::vector<Task *> MainWindow::selectedTasks(bool withSubtasks) const
 TaskFile *MainWindow::selectedFile() const
 {
     const Pane &p = current();
-    return p.model->fileAt(p.toSource(p.view->currentIndex()));
+    return p.model->fileAt(p.view->currentIndex());
 }
 
 MainWindow::SavedView MainWindow::saveView(const Pane &p) const
@@ -591,10 +593,10 @@ MainWindow::SavedView MainWindow::saveView(const Pane &p) const
     if (!p.view)
         return s;
     for (const QModelIndex &pi : p.view->selectionModel()->selectedRows(0)) {
-        if (const Task *t = p.model->taskAt(p.toSource(pi)))
+        if (const Task *t = p.model->taskAt(pi))
             s.selection.push_back({t->file->path, t->line});
     }
-    if (const Task *t = p.model->taskAt(p.toSource(p.view->currentIndex())))
+    if (const Task *t = p.model->taskAt(p.view->currentIndex()))
         s.current = LineKey{t->file->path, t->line};
     s.scroll = p.view->verticalScrollBar()->value();
     return s;
@@ -604,7 +606,7 @@ void MainWindow::restoreView(Pane &p, const SavedView &s, bool scrollToCurrent)
 {
     auto viewIndex = [&](const LineKey &k) {
         const Task *t = m_store->taskAt(k.path, k.line);
-        return t ? p.fromSource(p.model->indexOf(t)) : QModelIndex();
+        return t ? p.model->indexOf(t) : QModelIndex();
     };
     QItemSelection sel;
     for (const LineKey &k : s.selection) {
@@ -663,6 +665,24 @@ void MainWindow::toggleDone()
     setState(allDone ? TaskState::Todo : TaskState::Done);
 }
 
+void MainWindow::toggleTask(Task *task)
+{
+    // Checkbox click: done <-> todo for this task and all its subtasks.
+    const TaskState state = task->state == TaskState::Done ? TaskState::Todo : TaskState::Done;
+    const QDate today = QDate::currentDate();
+    std::vector<Edit> edits;
+    std::function<void(Task *)> add = [&](Task *t) {
+        if (t->state != state) {
+            const QString raw = t->raw();
+            edits.push_back({t->file->path, t->line, {raw}, {parser::setState(raw, state, today)}});
+        }
+        for (Task *c : t->children)
+            add(c);
+    };
+    add(task);
+    runEdits(edits, state == TaskState::Done ? tr("Mark done") : tr("Mark todo"));
+}
+
 void MainWindow::setDue()
 {
     const auto tasks = selectedTasks(true);
@@ -698,30 +718,18 @@ void MainWindow::setEta()
     const auto tasks = selectedTasks(true);
     if (tasks.empty())
         return;
-    QString text = tasks.front()->etaText;
-    for (;;) {
-        bool ok = false;
-        text = QInputDialog::getText(this, tr("Set ETA (%n task(s))", nullptr, int(tasks.size())),
-                                     tr("How long it might take: 2m, 90m, 2h, 3d, 1w, 1y.\nLeave empty to remove."),
-                                     QLineEdit::Normal, text, &ok)
-                   .trimmed();
-        if (!ok)
-            return;
-        if (text.startsWith(u'~'))
-            text.remove(0, 1);
-        if (text.isEmpty() || parser::parseEta(text) > 0)
-            break;
-        QMessageBox::warning(this, tr("Set ETA"),
-                             tr("\"%1\" is not an ETA. Use a number followed by m, h, d, w or y.").arg(text));
-    }
+    EtaDialog dlg(tasks.front()->etaText, int(tasks.size()), this);
+    if (dlg.exec() != QDialog::Accepted)
+        return;
+    const QString eta = dlg.eta();
     std::vector<Edit> edits;
     for (const Task *t : tasks) {
-        if (t->etaText == text)
+        if (t->etaText == eta)
             continue;
         const QString raw = t->raw();
-        edits.push_back({t->file->path, t->line, {raw}, {parser::setEta(raw, text)}});
+        edits.push_back({t->file->path, t->line, {raw}, {parser::setEta(raw, eta)}});
     }
-    runEdits(edits, text.isEmpty() ? tr("Clear ETA") : tr("Set ETA"));
+    runEdits(edits, eta.isEmpty() ? tr("Clear ETA") : tr("Set ETA"));
 }
 
 void MainWindow::editText()
@@ -866,16 +874,9 @@ void MainWindow::applyTheme(const QString &name)
     theme::apply(theme::fromString(name));
     m_listModel->refreshColors();
     m_agendaModel->refreshColors();
+    m_sidebar->refreshColors();
     m_list.view->viewport()->update();
     m_agenda.view->viewport()->update();
-}
-
-void MainWindow::refreshAgendaView()
-{
-    QTreeView *v = m_agenda.view;
-    v->expandAll();
-    for (int r = 0, n = m_agenda.proxy->rowCount(); r < n; ++r)
-        v->setFirstColumnSpanned(r, {}, true); // day headers span every column
 }
 
 void MainWindow::updateTitle()
