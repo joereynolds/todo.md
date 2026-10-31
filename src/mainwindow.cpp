@@ -365,7 +365,7 @@ void MainWindow::buildUi()
     bar->setObjectName(QStringLiteral("main"));
     bar->setMovable(false);
     bar->setToolButtonStyle(Qt::ToolButtonTextOnly);
-    bar->addActions({m_toggleSidebar, m_addDir, m_reload});
+    bar->addActions({m_toggleSidebar, m_reload});
     bar->addSeparator();
     m_filter = new QLineEdit(this);
     m_filter->setPlaceholderText(tr("Filter: words, paths, !2026-11, ~<=15m …  (Ctrl+F or /)"));
