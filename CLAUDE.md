@@ -31,6 +31,19 @@ from `jurplel/install-qt-action` (Ubuntu's packaged Qt 6.4 is below the 6.5 mini
 Development happens on Qt 6.11, so avoid APIs newer than 6.8, or guard them with
 `QT_VERSION_CHECK`.
 
+Packaging and releases:
+- `packaging/todomd.desktop` + `packaging/todomd.svg`, installed by `cmake --install` (Linux).
+- Nix: `package.nix` (the derivation; version read from `project()` in CMakeLists.txt,
+  tests run in `checkPhase` offscreen), `flake.nix` (packages, `overlays.default`,
+  devShell; x86_64/aarch64 Linux), `default.nix` for non-flake users. New source dirs
+  must be added to the fileset in `package.nix`, or the nix build won't see them.
+  `.github/workflows/nix.yml` runs `nix flake check`, `nix build`, a smoke test and
+  the non-flake build on every push.
+- Releases: bump `project(todomd VERSION x.y.z)`, then `git tag vx.y.z && git push
+  origin vx.y.z`. `.github/workflows/release.yml` refuses a tag that doesn't match,
+  then builds on ubuntu-22.04 (older glibc) with Qt 6.8, runs ctest, packs an AppImage
+  with linuxdeploy + its Qt plugin, and attaches it to a GitHub release.
+
 Perf baseline (200k tasks / 5,000 files, generated corpus, every row visible):
 scan+parse ≈ 50 ms, first paint ≈ 120 ms total (the list, the agenda with subtasks, and
 the sidebar all build up front). A filter change takes 10–70 ms (the

@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=todo.md
+GenericName=Task manager
+Comment=Manage markdown tasks
+Exec=todomd
+Icon=todomd
+Terminal=false
+Categories=Office;ProjectManagement;
+Keywords=todo;tasks;markdown;gtd;agenda;
+StartupWMClass=todomd

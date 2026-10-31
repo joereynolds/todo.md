@@ -1,0 +1,33 @@
+name: nix
+
+# Keeps the flake building (tests run inside the nix build) so
+# `nix run github:joereynolds/todo.md` never breaks.
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: cachix/install-nix-action@v31
+        with:
+          github_access_token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Check flake
+        run: nix flake check -L
+
+      - name: Build
+        run: nix build .#todomd -L
+
+      - name: Smoke test
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: ./result/bin/todomd --version
+
+      - name: Non-flake build (default.nix)
+        run: nix-build default.nix -I nixpkgs=channel:nixos-unstable --no-out-link
