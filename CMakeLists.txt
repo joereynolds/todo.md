@@ -30,6 +30,7 @@ add_library(todoapp STATIC
     src/theme.h src/theme.cpp
     src/taskview.h src/taskview.cpp
     src/sidebar.h src/sidebar.cpp
+    src/tagcompleter.h src/tagcompleter.cpp
     src/mainwindow.h src/mainwindow.cpp
 )
 target_link_libraries(todoapp PUBLIC todocore Qt6::Widgets PRIVATE Qt6::Concurrent)

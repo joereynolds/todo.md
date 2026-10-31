@@ -5,12 +5,16 @@
 #include "taskview.h"
 
 #include <QAbstractButton>
+#include <cmath>
 #include <QGridLayout>
 #include <QHBoxLayout>
 #include <QHeaderView>
 #include <QLabel>
 #include <QLineEdit>
 #include <QPainter>
+#include <QScrollBar>
+#include <QScrollArea>
+#include <QMouseEvent>
 #include <QPushButton>
 #include <QTextCharFormat>
 #include <QVBoxLayout>
@@ -168,9 +172,144 @@ void TaskCalendar::paintCell(QPainter *p, const QRect &rect, QDate date) const
     p->restore();
 }
 
+// ---------------------------------------------------------------- tag cloud
+
+namespace {
+constexpr int kChipPadX = 7, kChipGap = 4, kCountGap = 6; // gap between the tag and its count
+}
+
+TagCloud::TagCloud(QWidget *parent) : QWidget(parent)
+{
+    setMouseTracking(true);
+    setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Preferred);
+}
+
+QFont TagCloud::chipFont() const
+{
+    QFont f = font();
+    if (f.pointSizeF() > 0)
+        f.setPointSizeF(f.pointSizeF() * 0.92);
+    return f;
+}
+
+void TagCloud::setItems(std::vector<Item> items)
+{
+    m_items = std::move(items);
+    m_hover = -1;
+    updateGeometry();
+    update();
+}
+
+void TagCloud::setActive(const QString &tag)
+{
+    if (tag.compare(m_active, Qt::CaseInsensitive) == 0 && tag.size() == m_active.size())
+        return;
+    m_active = tag;
+    update();
+}
+
+std::vector<QRect> TagCloud::chipRects(int width) const
+{
+    const QFontMetrics fm(chipFont());
+    const int h = fm.height() + 6;
+    std::vector<QRect> out;
+    int x = 0, y = 0;
+    for (const Item &it : m_items) {
+        const int textW = fm.horizontalAdvance(u'#' + it.tag) + kCountGap + fm.horizontalAdvance(QString::number(it.count));
+        // A few pixels of slack: an exact fit can still elide after sub-pixel rounding.
+        const int w = std::min(textW + 2 * kChipPadX + 4, std::max(20, width));
+        if (x > 0 && x + w > width) {
+            x = 0;
+            y += h + kChipGap;
+        }
+        out.emplace_back(x, y, w, h);
+        x += w + kChipGap;
+    }
+    return out;
+}
+
+int TagCloud::heightForWidth(int width) const
+{
+    const auto rects = chipRects(width);
+    return rects.empty() ? 0 : rects.back().bottom() + 2;
+}
+
+QSize TagCloud::sizeHint() const
+{
+    return {200, heightForWidth(200)};
+}
+
+int TagCloud::hitTest(const QPoint &pos) const
+{
+    const auto rects = chipRects(width());
+    for (size_t i = 0; i < rects.size(); ++i) {
+        if (rects[i].contains(pos))
+            return int(i);
+    }
+    return -1;
+}
+
+void TagCloud::paintEvent(QPaintEvent *)
+{
+    QPainter p(this);
+    p.setRenderHint(QPainter::Antialiasing);
+    const TaskColors c = TaskColors::fromPalette(palette());
+    const QFont f = chipFont();
+    const QFontMetrics fm(f);
+    p.setFont(f);
+    const auto rects = chipRects(width());
+    for (size_t i = 0; i < rects.size(); ++i) {
+        const Item &it = m_items[i];
+        const bool active = it.tag.compare(m_active, Qt::CaseInsensitive) == 0;
+        const QRectF r = QRectF(rects[i]).adjusted(0.5, 0.5, -0.5, -0.5);
+        // Same quiet look as the filter tiles: outlined when active, tinted on hover.
+        p.setPen(active ? QPen(c.checkBorder, 1) : Qt::NoPen);
+        p.setBrush(active || int(i) == m_hover ? c.pill : c.band);
+        p.drawRoundedRect(r, r.height() / 2, r.height() / 2);
+        const QRectF inner = r.adjusted(kChipPadX, 0, -kChipPadX, 0);
+        const QString count = QString::number(it.count);
+        const int countW = fm.horizontalAdvance(count);
+        p.setPen(c.dim);
+        p.drawText(inner, Qt::AlignRight | Qt::AlignVCenter, count);
+        p.setPen(c.pillText);
+        const QRectF tagRect = inner.adjusted(0, 0, -(countW + kCountGap), 0);
+        p.drawText(tagRect, Qt::AlignLeft | Qt::AlignVCenter,
+                   fm.elidedText(u'#' + it.tag, Qt::ElideRight, int(std::ceil(tagRect.width())) + 2));
+    }
+}
+
+void TagCloud::mouseMoveEvent(QMouseEvent *event)
+{
+    const int hit = hitTest(event->position().toPoint());
+    if (hit != m_hover) {
+        m_hover = hit;
+        setCursor(hit >= 0 ? Qt::PointingHandCursor : Qt::ArrowCursor);
+        setToolTip(hit >= 0 ? tr("Show tasks tagged #%1 (click again to clear)").arg(m_items[size_t(hit)].tag)
+                            : QString());
+        update();
+    }
+}
+
+void TagCloud::leaveEvent(QEvent *)
+{
+    m_hover = -1;
+    update();
+}
+
+void TagCloud::mousePressEvent(QMouseEvent *event)
+{
+    if (event->button() != Qt::LeftButton)
+        return;
+    const int hit = hitTest(event->position().toPoint());
+    if (hit < 0)
+        return;
+    const QString &tag = m_items[size_t(hit)].tag;
+    emit tagClicked(tag, tag.compare(m_active, Qt::CaseInsensitive) == 0);
+}
+
 // ---------------------------------------------------------------- sidebar
 
-Sidebar::Sidebar(TaskStore *store, QWidget *parent) : QWidget(parent), m_store(store)
+Sidebar::Sidebar(TaskStore *store, TagIndex *tags, QWidget *parent) : QWidget(parent), m_store(store), m_tags(tags)
 {
     auto *layout = new QVBoxLayout(this);
     layout->setContentsMargins(6, 6, 6, 6);
@@ -192,7 +331,7 @@ Sidebar::Sidebar(TaskStore *store, QWidget *parent) : QWidget(parent), m_store(s
         {tr("next 7 days"), QStringLiteral("due:week")},
         {tr("in progress"), QStringLiteral("is:doing")},
         {tr("quick (≤ 2m)"), QStringLiteral("~<=2m is:open")},
-        {tr("done today"), QString()},
+        {tr("done today"), QStringLiteral("done:today")},
     };
     int i = 0;
     for (const auto &[label, filter] : stats) {
@@ -244,6 +383,21 @@ Sidebar::Sidebar(TaskStore *store, QWidget *parent) : QWidget(parent), m_store(s
     layout->addWidget(heading(tr("Filters")));
     layout->addLayout(grid);
 
+    m_tagHeading = heading(tr("Tags"));
+    layout->addWidget(m_tagHeading);
+    m_tagCloud = new TagCloud(this);
+    m_tagArea = new QScrollArea(this);
+    m_tagArea->setWidget(m_tagCloud);
+    m_tagArea->setWidgetResizable(true);
+    m_tagArea->setFrameShape(QFrame::NoFrame);
+    m_tagArea->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+    m_tagArea->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Fixed);
+    layout->addWidget(m_tagArea);
+    connect(m_tagCloud, &TagCloud::tagClicked, this, [this](const QString &tag, bool active) {
+        emit filterRequested(active ? QString() : u'#' + tag);
+    });
+    connect(m_tags, &TagIndex::changed, this, &Sidebar::updateTags);
+
     connect(m_calendar, &QCalendarWidget::selectionChanged, this, [this] { showDay(m_calendar->selectedDate()); });
     connect(todayButton, &QPushButton::clicked, this, [this] { showDay(QDate::currentDate()); });
     connect(m_dayView, &TaskView::checkClicked, this, [this](const QModelIndex &index) {
@@ -267,6 +421,32 @@ Sidebar::Sidebar(TaskStore *store, QWidget *parent) : QWidget(parent), m_store(s
     connect(store, &TaskStore::changed, this, &Sidebar::refresh);
     refresh();
     updateAddHint();
+    updateTags();
+}
+
+void Sidebar::updateTags()
+{
+    if (!m_tagArea)
+        return;
+    std::vector<TagCloud::Item> items;
+    for (const TagIndex::Entry &e : m_tags->entries()) {
+        if (e.open > 0) // nothing to show for tags on finished tasks only
+            items.push_back({e.tag, e.open});
+    }
+    const bool any = !items.empty();
+    m_tagCloud->setItems(std::move(items));
+    m_tagHeading->setVisible(any);
+    m_tagArea->setVisible(any);
+    // As tall as the chips, up to about five rows, then it scrolls.
+    const int rowH = QFontMetrics(m_tagCloud->font()).height() + 10;
+    const int width = std::max(50, m_tagArea->viewport()->width());
+    m_tagArea->setFixedHeight(std::min(m_tagCloud->heightForWidth(width), rowH * 5));
+}
+
+void Sidebar::resizeEvent(QResizeEvent *event)
+{
+    QWidget::resizeEvent(event);
+    updateTags();
 }
 
 Task *Sidebar::selectedDayTask() const
@@ -294,6 +474,7 @@ void Sidebar::showDay(const QDate &day)
 void Sidebar::setActiveFilter(const QString &text)
 {
     const QString t = text.trimmed();
+    m_tagCloud->setActive(t.startsWith(u'#') && !t.contains(u' ') ? t.mid(1) : QString());
     for (StatButton *b : m_stats) {
         if (b->isCheckable())
             b->setChecked(!t.isEmpty() && b->filter() == t);

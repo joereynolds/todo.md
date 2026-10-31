@@ -4,6 +4,7 @@
 
 #include <QApplication>
 #include <QKeyEvent>
+#include <QLineEdit>
 #include <QMouseEvent>
 #include <QPainter>
 #include <QPainterPath>
@@ -260,6 +261,15 @@ QSize TaskDelegate::sizeHint(const QStyleOptionViewItem &option, const QModelInd
         s.setWidth(s.width() + l.text.left() + 40);
     }
     return s;
+}
+
+QWidget *TaskDelegate::createEditor(QWidget *parent, const QStyleOptionViewItem &option,
+                                    const QModelIndex &index) const
+{
+    QWidget *w = QStyledItemDelegate::createEditor(parent, option, index);
+    if (auto *edit = qobject_cast<QLineEdit *>(w); edit && m_editorHook)
+        m_editorHook(edit);
+    return w;
 }
 
 void TaskDelegate::updateEditorGeometry(QWidget *editor, const QStyleOptionViewItem &option,

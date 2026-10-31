@@ -12,6 +12,7 @@
 #include <QApplication>
 #include <QClipboard>
 #include <QComboBox>
+#include <QCompleter>
 #include <QDialog>
 #include <QDialogButtonBox>
 #include <QPushButton>
@@ -303,6 +304,43 @@ private slots:
                 clickable << b->toolTip();
         }
         QCOMPARE(clickable, QStringList({"Filter: due:week (click again to clear)"}));
+    }
+
+    // Runs after tagClick: t.md has #home, #work and #work/x.
+    void tagCompletionAndCloud()
+    {
+        auto *sidebar = m_window->findChild<Sidebar *>();
+        QLineEdit *box = sidebar->addBox();
+        auto *completer = box->findChild<QCompleter *>();
+        QVERIFY(completer);
+        m_window->activateWindow();
+        box->setFocus();
+        QTest::keyClicks(box, "buy #wo");
+        QVERIFY(completer->popup()->isVisible());
+        QCOMPARE(completer->completionCount(), 2); // #work, #work/x
+        QTest::keyClick(completer->popup(), Qt::Key_Down);
+        QTest::keyClick(completer->popup(), Qt::Key_Return);
+        QCOMPARE(box->text(), QString("buy #work ")); // only the word is replaced, nothing submitted
+        QTest::keyClicks(box, "#zz");
+        QVERIFY(!completer->popup()->isVisible());
+        box->clear();
+
+        // The sidebar tag cloud: tags with open tasks and their counts; click filters, again clears.
+        TagCloud *cloud = sidebar->tagCloud();
+        QStringList items;
+        for (const auto &it : cloud->items())
+            items << QStringLiteral("%1 %2").arg(it.tag).arg(it.count);
+        QCOMPARE(items, QStringList({"home 1", "work 2", "work/x 1"}));
+        QLineEdit *filter = nullptr;
+        for (QLineEdit *e : m_window->findChildren<QLineEdit *>()) {
+            if (e->placeholderText().startsWith("Filter"))
+                filter = e;
+        }
+        const auto rects = cloud->chipRects(cloud->width());
+        QTest::mouseClick(cloud, Qt::LeftButton, {}, rects[1].center());
+        QCOMPARE(filter->text(), QString("#work"));
+        QTest::mouseClick(cloud, Qt::LeftButton, {}, cloud->chipRects(cloud->width())[1].center());
+        QCOMPARE(filter->text(), QString());
     }
 };
 

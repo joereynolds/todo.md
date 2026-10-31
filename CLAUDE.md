@@ -61,11 +61,12 @@ free-text `contains` is the slowest). Re-run `--bench` after touching the load o
 | `src/edits.*` | `Edit` (range of lines: expected `before`, replacement `after`), `LineBuffer` (preserves CRLF / trailing newline), `applyEdits()`, which also returns the inverse edits for undo. |
 | `src/editor.*` | Builds the command for "Open in editor" from `$EDITOR` (pure `editor::build`, unit tested). |
 | `src/store.*` | `TaskStore`: several roots, async load (thread pool), `QFileSystemWatcher` sync, the **only** writer to disk, undo/redo. |
-| `src/models.*` | `TaskFilter` (state / words / ETA / `due:` / `is:`), `TaskColors`, `FlatTaskModel` (tree as a flat list: groups, filtering, collapse) with `TaskListModel` (group = file) and `AgendaModel` (group = day; single-day mode for the sidebar). |
+| `src/models.*` | `TaskFilter` (state / words / ETA / `due:` / `done:` / `is:` / `#tag`), `TagIndex`, `TaskColors`, `FlatTaskModel` (tree as a flat list: groups, filtering, collapse) with `TaskListModel` (group = file) and `AgendaModel` (group = day; single-day mode for the sidebar). |
 | `src/dialogs.*` | Due-date picker, find/replace, ETA picker (number + unit + presets). |
 | `src/theme.*` | Light (default) / Soft (grey light) / Dark / System. Fusion style + palette. |
 | `src/taskview.*` | `TaskDelegate` (draws checkbox, chevron, guides, header band, progress pill) and `TaskView` (chevron/checkbox/tag-chip clicks, Left/Right keys, optional header spans). |
-| `src/sidebar.*` | `Sidebar`: stat tiles (click = filter), `TaskCalendar` (dots on due days), single-day `AgendaModel` list. |
+| `src/sidebar.*` | `Sidebar`: stat tiles (click = filter), `TaskCalendar` (dots on due days), single-day `AgendaModel` list, add box, `TagCloud`. |
+| `src/tagcompleter.*` | `TagCompleter`: completes the `#word` under the cursor in any `QLineEdit` from `TagIndex`. |
 | `src/mainwindow.*` | Toolbar, tabs, actions and shortcuts, bulk ops, selection/scroll preservation. |
 | `tests/` | `test_core` (parser, edits, ETA, editor command), `test_store` (store + models under `QAbstractItemModelTester`, real temp dirs and watcher, multiple roots), `test_window` (drives shortcuts on the real window). |
 
@@ -177,9 +178,13 @@ dragged shut (which unchecks the action). The state is saved (`view/sidebar`,
   `todo.md`. The placeholder says which.
 - **Filters:** compact, deliberately neutral (the user asked for less colour) one-line
   tiles: overdue, due today, next 7 days, in progress, quick (≤ 2m), done today. Each
-  except done-today sets the filter box to its term, and clicking again clears it. The
+  sets the filter box to its term (done today = `done:today`), and clicking again clears it. The
   active one is outlined. A tile at 0 isn't clickable (nothing to show), unless it's the
   active filter, so it can still be cleared.
+- **Tags:** a `TagCloud` of chips (`#tag count`, open tasks only, alphabetical; nested tags
+  also count for their parents) in a scroll area capped at ~5 rows, hidden when there are
+  none. Click = filter `#tag`, again = clear; the active one is outlined. Counts come from
+  `TagIndex`, rebuilt on every store change.
 
 Day header wording (`AgendaModel::groupData`): today / tomorrow / "in N days" /
 "N days overdue" only within ±14 days, otherwise just the date. A past day with no open
@@ -204,12 +209,19 @@ day in the sidebar read "174 days overdue".
   `is:todo|doing|done|cancelled|open` filter by date and state. `#tag` matches the tag
   exactly (case-insensitive) or nested under it (`#work` matches `#work/meeting`, not `#workshop`).
   Subtasks inherit their ancestors' tags for filtering (the Tags column shows only a task's own).
+  `done:today|yesterday|week|any` matches done tasks by their `x` date (week = last 7 days).
+  Explicit `is:` and `done:` terms override the toolbar state toggles (otherwise `done:today`
+  would show nothing with Done hidden, the default).
 - Tags column (list and agenda, hidden in the sidebar): chips drawn by `TaskDelegate`
   (`tagRects` is the shared paint/hit-test geometry; overflow shows `+N`, the tooltip lists
   all). Clicking a chip sets the filter to `#tag`; clicking it again when the filter is
-  exactly that clears it. The
-  toolbar ETA dropdown adds a preset on top: ≤2m (GTD "do it now"), ≤15m, ≤1h, 1h–1d,
-  >1d, has/no ETA. ETAs ≤ 2m are shown in green.
+  exactly that clears it.
+- The toolbar ETA dropdown adds a preset on top of the filter text: ≤2m (GTD "do it now"),
+  ≤15m, ≤1h, 1h–1d, >1d, has/no ETA. ETAs ≤ 2m are shown in green.
+- Tag autocomplete (`TagCompleter`, fed by the shared `TagIndex`) on the filter box, the
+  sidebar add box, the inline editor and the N / Shift+N dialog: it completes only the
+  `#word` under the cursor. Enter/Tab on a highlighted suggestion only completes; QCompleter
+  would otherwise also pass Enter to the line edit and submit the half-typed text.
 - Selection is `ExtendedSelection` + `SelectRows`: click-drag, shift and ctrl all work.
 - Shortcuts: Space toggle done · X done · P in progress · T todo · C cancelled ·
   D due date · Shift+D clear due · ~ set ETA (number + unit dialog) · Ctrl+B sidebar · F2/double-click edit (multi-select →
@@ -246,7 +258,7 @@ paths are re-added after each flush. F5 does a full rescan.
 ## Not done yet / ideas
 
 - Reordering tasks (move up/down, drag between files).
-- Priorities, recurring tasks (not in the syntax yet). Tag autocompletion, a tag list in the sidebar.
+- Priorities, recurring tasks (not in the syntax yet).
 - ETA roll-up (sum of open subtasks' ETAs on the parent).
 - Weekly or calendar layout for the agenda.
 - Undo history is per session (in memory) only.

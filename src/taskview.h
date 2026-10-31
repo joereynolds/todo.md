@@ -3,7 +3,10 @@
 #include <QStyledItemDelegate>
 #include <QTreeView>
 
+#include <functional>
 #include <vector>
+
+class QLineEdit;
 
 class FlatTaskModel;
 
@@ -34,9 +37,14 @@ public:
     QSize sizeHint(const QStyleOptionViewItem &option, const QModelIndex &index) const override;
     void updateEditorGeometry(QWidget *editor, const QStyleOptionViewItem &option,
                               const QModelIndex &index) const override;
+    QWidget *createEditor(QWidget *parent, const QStyleOptionViewItem &option,
+                          const QModelIndex &index) const override;
+    // Called with each inline editor (e.g. to attach a completer).
+    void setEditorHook(std::function<void(QLineEdit *)> hook) { m_editorHook = std::move(hook); }
 
 private:
     bool m_tree;
+    std::function<void(QLineEdit *)> m_editorHook;
 };
 
 // Item view for tasks: a press on the chevron expands/collapses (tree mode),

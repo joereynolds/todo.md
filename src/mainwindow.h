@@ -13,6 +13,7 @@
 class AgendaModel;
 class QSplitter;
 class Sidebar;
+class TagIndex;
 class QAction;
 class QActionGroup;
 class QCheckBox;
@@ -122,6 +123,7 @@ private:
     QAction *m_due, *m_clearDue, *m_eta, *m_edit, *m_replace, *m_add, *m_addSub, *m_delete;
     QAction *m_openEditor;
     QAction *m_copyList;
+    TagIndex *m_tagIndex = nullptr;
     QAction *m_showState[4];
     QAction *m_focusFilter, *m_focusFilter2, *m_tasksTab, *m_agendaTab, *m_expandAll, *m_collapseAll, *m_toggleSidebar;
     QActionGroup *m_themeGroup;

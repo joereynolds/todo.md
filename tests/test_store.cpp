@@ -345,6 +345,57 @@ private slots:
         QCOMPARE(read(path("a.md")), before);
     }
 
+    void doneTerms()
+    {
+        const QDate today = QDate::currentDate();
+        const QString d0 = today.toString(Qt::ISODate), d1 = today.addDays(-1).toString(Qt::ISODate),
+                      d6 = today.addDays(-6).toString(Qt::ISODate), d7 = today.addDays(-7).toString(Qt::ISODate);
+        auto f = parser::parse("/d.md", "d.md",
+                               QStringLiteral("- [x] t x%1\n- [x] y x%2\n- [x] six x%3\n- [x] seven x%4\n"
+                                              "- [x] undated\n- [ ] open\n- [-] gone -%1\n")
+                                   .arg(d0, d1, d6, d7)
+                                   .toUtf8());
+        auto names = [&](const QString &text) {
+            TaskFilter filter;
+            filter.setStateVisible(TaskState::Done, false); // the default toolbar state
+            filter.setStateVisible(TaskState::Cancelled, false);
+            filter.setText(text);
+            QStringList out;
+            for (const Task &t : f->tasks) {
+                if (filter.matches(t))
+                    out << t.text;
+            }
+            return out;
+        };
+        // Explicit done:/is: terms show done tasks even with the Done toggle off.
+        QCOMPARE(names("done:today"), QStringList({"t"}));
+        QCOMPARE(names("done:yesterday"), QStringList({"y"}));
+        QCOMPARE(names("done:week"), QStringList({"t", "y", "six"}));
+        QCOMPARE(names("done:any"), QStringList({"t", "y", "six", "seven", "undated"}));
+        QCOMPARE(names("is:done"), QStringList({"t", "y", "six", "seven", "undated"}));
+        QCOMPARE(names("is:cancelled"), QStringList({"gone"}));
+        QCOMPARE(names(""), QStringList({"open"}));
+        TaskFilter f2;
+        f2.setText("done:today");
+        QVERIFY(f2.narrows());
+    }
+
+    void tagIndex()
+    {
+        QTemporaryDir dir;
+        write(dir.path() + "/x.md", "- [ ] a #Work/meeting #home\n- [x] b #work\n- [ ] c #work/meeting/notes\n- [x] d #old\n");
+        TaskStore store;
+        TagIndex index(&store);
+        QSignalSpy loaded(&store, &TaskStore::loadFinished);
+        store.setRoots({dir.path()});
+        QVERIFY(loaded.wait(5000));
+        QStringList got;
+        for (const TagIndex::Entry &e : index.entries())
+            got << QStringLiteral("%1 %2/%3").arg(e.tag).arg(e.open).arg(e.total);
+        // Parents of nested tags count too; casing is the first one seen.
+        QCOMPARE(got, QStringList({"home 1/1", "old 0/1", "Work 2/3", "Work/meeting 2/2", "work/meeting/notes 1/1"}));
+    }
+
     void bulletList()
     {
         auto f = parser::parse("/l.md", "l.md",

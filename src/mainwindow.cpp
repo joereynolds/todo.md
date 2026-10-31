@@ -6,6 +6,7 @@
 #include "parser.h"
 #include "sidebar.h"
 #include "store.h"
+#include "tagcompleter.h"
 #include "taskview.h"
 #include "theme.h"
 
@@ -134,7 +135,9 @@ MainWindow::MainWindow(TaskStore *store, QWidget *parent) : QMainWindow(parent),
     m_agendaModel = new AgendaModel(store, this);
     m_list.model = m_listModel;
     m_agenda.model = m_agendaModel;
-    m_sidebar = new Sidebar(store, this);
+    m_tagIndex = new TagIndex(store, this);
+    m_sidebar = new Sidebar(store, m_tagIndex, this);
+    new TagCompleter(m_tagIndex, m_sidebar->addBox());
 
     buildActions();
     buildUi();
@@ -307,6 +310,9 @@ void MainWindow::buildActions()
 QTreeView *MainWindow::makeView(bool tree)
 {
     auto *v = new TaskView(tree, this);
+    static_cast<TaskDelegate *>(v->itemDelegate())->setEditorHook([this](QLineEdit *edit) {
+        new TagCompleter(m_tagIndex, edit);
+    });
     connect(v, &TaskView::checkClicked, this, [this, v](const QModelIndex &index) {
         const Pane &p = v == m_agenda.view ? m_agenda : m_list;
         if (Task *t = p.model->taskAt(index))
@@ -386,6 +392,7 @@ void MainWindow::buildUi()
     m_filter->setClearButtonEnabled(true);
     m_filter->setMinimumWidth(220);
     m_filter->installEventFilter(new FilterKeys(m_filter, [this] { return current().view; }));
+    new TagCompleter(m_tagIndex, m_filter);
     bar->addWidget(m_filter);
     m_etaFilter = new QComboBox(this);
     for (const EtaPreset &p : etaPresets())
@@ -856,10 +863,16 @@ void MainWindow::addTask(bool subtask)
     if (anchorTask)
         prompt = subtask ? tr("New subtask of \"%1\":").arg(anchorTask->text)
                          : tr("New task after \"%1\":").arg(anchorTask->text);
-    bool ok = false;
-    const QString text = QInputDialog::getText(this, subtask ? tr("Add subtask") : tr("Add task"), prompt,
-                                               QLineEdit::Normal, QString(), &ok);
-    if (!ok || text.trimmed().isEmpty())
+    QInputDialog dlg(this);
+    dlg.setWindowTitle(subtask ? tr("Add subtask") : tr("Add task"));
+    dlg.setLabelText(prompt);
+    dlg.setInputMode(QInputDialog::TextInput);
+    if (auto *edit = dlg.findChild<QLineEdit *>())
+        new TagCompleter(m_tagIndex, edit);
+    if (dlg.exec() != QDialog::Accepted)
+        return;
+    const QString text = dlg.textValue();
+    if (text.trimmed().isEmpty())
         return;
     if (anchorTask)
         insertTask(text, anchorTask, subtask, {}, true);

@@ -67,6 +67,7 @@ void TaskFilter::setText(const QString &text)
     m_tags.clear();
     m_textConds.clear();
     m_due.clear();
+    m_done.clear();
     m_isMask = 0;
     m_today = QDate::currentDate();
     for (const QString &term : text.split(u' ', Qt::SkipEmptyParts)) {
@@ -88,6 +89,18 @@ void TaskFilter::setText(const QString &text)
             for (const auto &[name, d] : dues) {
                 if (lower.mid(4) == QLatin1String(name)) {
                     m_due.push_back(d);
+                    known = true;
+                }
+            }
+            if (known)
+                continue;
+        } else if (lower.startsWith(QLatin1String("done:"))) {
+            static const std::pair<const char *, Done> dones[] = {
+                {"today", Done::Today}, {"yesterday", Done::Yesterday}, {"week", Done::Week}, {"any", Done::Any}};
+            bool known = false;
+            for (const auto &[name, d] : dones) {
+                if (lower.mid(5) == QLatin1String(name)) {
+                    m_done.push_back(d);
                     known = true;
                 }
             }
@@ -120,7 +133,7 @@ void TaskFilter::setStateVisible(TaskState state, bool visible)
 
 bool TaskFilter::narrows() const
 {
-    return !m_terms.isEmpty() || !m_tags.isEmpty() || !m_textConds.empty() || !m_presetConds.empty() || !m_due.empty() || m_isMask;
+    return !m_terms.isEmpty() || !m_tags.isEmpty() || !m_textConds.empty() || !m_presetConds.empty() || !m_due.empty() || !m_done.empty() || m_isMask;
 }
 
 bool TaskFilter::showsEverything() const
@@ -131,8 +144,26 @@ bool TaskFilter::showsEverything() const
 bool TaskFilter::matches(const Task &t) const
 {
     const unsigned bit = 1u << int(t.state);
-    if (!(m_states & bit) || (m_isMask && !(m_isMask & bit)))
+    if (m_isMask || !m_done.empty()) {
+        // An explicit state term decides on its own; the toolbar toggles don't apply.
+        if (m_isMask && !(m_isMask & bit))
+            return false;
+    } else if (!(m_states & bit)) {
         return false;
+    }
+    for (Done d : m_done) {
+        if (t.state != TaskState::Done)
+            return false;
+        bool ok = false;
+        switch (d) {
+        case Done::Today: ok = t.completed == m_today; break;
+        case Done::Yesterday: ok = t.completed == m_today.addDays(-1); break;
+        case Done::Week: ok = t.completed.isValid() && t.completed > m_today.addDays(-7) && t.completed <= m_today; break;
+        case Done::Any: ok = true; break;
+        }
+        if (!ok)
+            return false;
+    }
     for (const EtaCond &c : m_presetConds) {
         if (!c.holds(t.eta))
             return false;
@@ -169,6 +200,53 @@ bool TaskFilter::matches(const Task &t) const
             return false;
     }
     return true;
+}
+
+TagIndex::TagIndex(TaskStore *store, QObject *parent) : QObject(parent), m_store(store)
+{
+    connect(store, &TaskStore::changed, this, &TagIndex::rebuild);
+    rebuild();
+}
+
+void TagIndex::rebuild()
+{
+    QHash<QString, size_t> at; // lower case -> index in m_entries
+    m_entries.clear();
+    QStringList keys;
+    for (const auto &f : m_store->files()) {
+        for (const Task &t : f->tasks) {
+            if (t.tags.isEmpty())
+                continue;
+            keys.clear();
+            for (const QString &tag : t.tags) {
+                // The tag and each parent of it: work/meeting/notes -> work, work/meeting, ...
+                for (qsizetype i = tag.indexOf(u'/'); ; i = tag.indexOf(u'/', i + 1)) {
+                    const QString part = i < 0 ? tag : tag.left(i);
+                    if (!part.isEmpty()) {
+                        const QString key = part.toLower();
+                        if (!keys.contains(key)) {
+                            keys << key;
+                            auto it = at.constFind(key);
+                            if (it == at.cend()) {
+                                it = at.insert(key, m_entries.size());
+                                m_entries.push_back({part});
+                            }
+                            Entry &e = m_entries[*it];
+                            ++e.total;
+                            if (t.isOpen())
+                                ++e.open;
+                        }
+                    }
+                    if (i < 0)
+                        break;
+                }
+            }
+        }
+    }
+    std::sort(m_entries.begin(), m_entries.end(), [](const Entry &a, const Entry &b) {
+        return a.tag.compare(b.tag, Qt::CaseInsensitive) < 0;
+    });
+    emit changed();
 }
 
 QString tasksAsBulletList(const std::vector<Task *> &tasks)
