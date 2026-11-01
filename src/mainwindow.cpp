@@ -372,7 +372,10 @@ void MainWindow::buildActions()
     for (const auto &[name, label] : {std::pair{QStringLiteral("light"), tr("&Light")},
                                       std::pair{QStringLiteral("soft"), tr("S&oft (grey light)")},
                                       std::pair{QStringLiteral("dark"), tr("&Dark")},
-                                      std::pair{QStringLiteral("system"), tr("&System")}}) {
+                                      std::pair{QStringLiteral("system"), tr("&System")},
+                                      std::pair{QStringLiteral("clean"), tr("&Clean")},
+                                      std::pair{QStringLiteral("midnight"), tr("&Midnight")},
+                                      std::pair{QStringLiteral("paper"), tr("&Paper")}}) {
         QAction *a = m_themeGroup->addAction(label);
         a->setCheckable(true);
         a->setChecked(name == current);
@@ -535,7 +538,7 @@ void MainWindow::buildUi()
     agendaLayout->addWidget(m_agenda.view);
 
     m_tabs = new QTabWidget(this);
-    m_tabs->setDocumentMode(true);
+    m_tabs->setDocumentMode(!theme::cardLayout());
     m_tabs->addTab(m_list.view, tr("Tasks"));
     m_tabs->addTab(agendaPage, tr("Agenda"));
     m_templates.view = makeView(true);
@@ -1380,8 +1383,10 @@ void MainWindow::applyTheme(const QString &name)
     m_listModel->refreshColors();
     m_agendaModel->refreshColors();
     m_sidebar->refreshColors();
-    m_list.view->viewport()->update();
-    m_agenda.view->viewport()->update();
+    m_tabs->setDocumentMode(!theme::cardLayout());
+    // Row heights depend on the theme.
+    for (QTreeView *v : {m_list.view, m_agenda.view, m_templates.view})
+        v->doItemsLayout();
 }
 
 void MainWindow::updateTitle()

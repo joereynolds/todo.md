@@ -36,6 +36,7 @@ add_library(todoapp STATIC
     src/mainwindow.h src/mainwindow.cpp
 )
 target_link_libraries(todoapp PUBLIC todocore Qt6::Widgets PRIVATE Qt6::Concurrent)
+qt_add_resources(todoapp "icons" PREFIX "/" FILES src/icons/chevron-down.png src/icons/chevron-down@2x.png)
 
 qt_add_executable(todomd WIN32 MACOSX_BUNDLE src/main.cpp)
 target_link_libraries(todomd PRIVATE todoapp)

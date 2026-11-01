@@ -12,6 +12,7 @@
 #include <QLabel>
 #include <QLineEdit>
 #include <QPainter>
+#include <QToolButton>
 #include <QScrollBar>
 #include <QScrollArea>
 #include <QMouseEvent>
@@ -105,6 +106,18 @@ TaskCalendar::TaskCalendar(QWidget *parent) : QCalendarWidget(parent)
     setVerticalHeaderFormat(QCalendarWidget::NoVerticalHeader);
     setHorizontalHeaderFormat(QCalendarWidget::ShortDayNames);
     setMinimumHeight(230); // room for the dots under the day numbers
+    // Text chevrons instead of the style's arrow pixmaps, which are dark on every
+    // theme (invisible on a dark one); text follows the palette.
+    for (const auto &[name, glyph] : {std::pair{"qt_calendar_prevmonth", u"‹"}, std::pair{"qt_calendar_nextmonth", u"›"}}) {
+        if (auto *b = findChild<QToolButton *>(QLatin1String(name))) {
+            b->setIcon(QIcon());
+            b->setToolButtonStyle(Qt::ToolButtonTextOnly);
+            b->setText(QString::fromUtf16(glyph));
+            QFont f = b->font();
+            f.setPointSizeF(f.pointSizeF() * 1.5);
+            b->setFont(f);
+        }
+    }
     restyle();
 }
 
@@ -311,12 +324,15 @@ void TagCloud::mousePressEvent(QMouseEvent *event)
 
 Sidebar::Sidebar(TaskStore *store, TagIndex *tags, QWidget *parent) : QWidget(parent), m_store(store), m_tags(tags)
 {
+    setObjectName(QStringLiteral("sidebar"));
+    setAttribute(Qt::WA_StyledBackground); // so a theme's style sheet can colour it
     auto *layout = new QVBoxLayout(this);
     layout->setContentsMargins(6, 6, 6, 6);
     layout->setSpacing(6);
 
     auto heading = [this](const QString &text) {
         auto *l = new QLabel(text, this);
+        l->setObjectName(QStringLiteral("heading"));
         QFont f = l->font();
         f.setBold(true);
         l->setFont(f);

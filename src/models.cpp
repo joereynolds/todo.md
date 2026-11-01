@@ -1,4 +1,5 @@
 #include "models.h"
+#include "theme.h"
 
 #include "parser.h"
 #include "store.h"
@@ -290,6 +291,8 @@ TaskColors TaskColors::fromPalette(const QPalette &pal)
     c.dark = pal.color(QPalette::Window).lightness() < 128;
     c.dim = pal.color(QPalette::Disabled, QPalette::Text);
     c.doing = c.dark ? QColor(0x6c, 0xaa, 0xf0) : QColor(0x1f, 0x6f, 0xd0);
+    if (const QColor a = theme::accent(); a.isValid())
+        c.doing = a;
     c.overdue = c.dark ? QColor(0xf0, 0x70, 0x70) : QColor(0xc8, 0x2a, 0x2a);
     c.today = c.dark ? QColor(0xe8, 0xa8, 0x40) : QColor(0xb0, 0x6a, 0x00);
     c.quick = c.dark ? QColor(0x7c, 0xc8, 0x7c) : QColor(0x24, 0x80, 0x3a);

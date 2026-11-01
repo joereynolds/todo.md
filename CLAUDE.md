@@ -66,7 +66,7 @@ free-text `contains` is the slowest). Re-run `--bench` after touching the load o
 | `src/store.*` | `TaskStore`: several roots, async load (thread pool), `QFileSystemWatcher` sync, the **only** writer to disk, undo/redo. |
 | `src/models.*` | `TaskFilter` (state / words / ETA / `due:` / `done:` / `is:` / `#tag`), `TagIndex`, `TaskColors`, `FlatTaskModel` (tree as a flat list: groups, filtering, collapse) with `TaskListModel` (group = file) and `AgendaModel` (group = day; single-day mode for the sidebar). |
 | `src/dialogs.*` | Due-date picker, add task (`AddTaskDialog`: text + due choice), find/replace, ETA picker (number + unit + presets). |
-| `src/theme.*` | Light (default) / Soft (grey light) / Dark / System. Fusion style + palette. |
+| `src/theme.*` | Light (default) / Soft (grey light) / Dark / System: Fusion + palette. Clean / Midnight / Paper (the "modern" looks): Fusion + palette + an app style sheet generated from a `Look` (tokens: colours, radius, tab style, card, row padding); `theme::accent()` recolours in-progress, `rowPadding()` sets row height, `cardLayout()` turns tab `documentMode` off for Paper's card. Combo arrow is `src/icons/chevron-down.png` (Qt resource). |
 | `src/taskview.*` | `TaskDelegate` (draws checkbox, chevron, guides, header band, progress pill) and `TaskView` (chevron/checkbox/tag-chip clicks, Left/Right keys, optional header spans). |
 | `src/sidebar.*` | `Sidebar`: stat tiles (click = filter), `TaskCalendar` (dots on due days), single-day `AgendaModel` list, add box, `TagCloud`. |
 | `src/templatespage.*` | `TemplatesPage`: the Templates tab's frame (buttons + empty-state hint around a `TaskView`). |
@@ -285,8 +285,8 @@ day in the sidebar read "174 days overdue".
   launcher that doesn't inherit the shell environment, `$EDITOR` may be missing.
 - Settings live in `QSettings("todomd", "todomd")` (`~/.config/todomd/todomd.conf`):
   `directories` (list; migrated from the old `lastDirectory`), geometry, tab, state
-  filters (done and cancelled hidden by default), `view/theme` (default `light`; the user
-  has `system` saved), `view/collapsed`, `view/agendaCollapsed`, `view/sidebar`,
+  filters (done and cancelled hidden by default), `view/theme` (default `light`; also `soft`, `dark`, `system`,
+  `clean`, `midnight`, `paper`; the user has `system` saved), `view/collapsed`, `view/agendaCollapsed`, `view/sidebar`,
   `view/splitter`, `agenda/emptyDays`.
 
 ## File watching

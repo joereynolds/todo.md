@@ -1,6 +1,7 @@
 #include "taskview.h"
 
 #include "models.h"
+#include "theme.h"
 
 #include <QApplication>
 #include <QKeyEvent>
@@ -255,7 +256,7 @@ void TaskDelegate::paint(QPainter *p, const QStyleOptionViewItem &option, const 
 QSize TaskDelegate::sizeHint(const QStyleOptionViewItem &option, const QModelIndex &index) const
 {
     QSize s = QStyledItemDelegate::sizeHint(option, index);
-    s.setHeight(std::max(s.height(), option.fontMetrics.height() + 9));
+    s.setHeight(std::max(s.height(), option.fontMetrics.height() + theme::rowPadding()));
     if (index.column() == 0) {
         const Layout l = layoutFor(QRect(0, 0, 10000, s.height()), index, m_tree);
         s.setWidth(s.width() + l.text.left() + 40);

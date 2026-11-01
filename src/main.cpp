@@ -36,7 +36,7 @@ int main(int argc, char *argv[])
     QCommandLineOption tab(QStringLiteral("tab"), QStringLiteral("Tab to show: tasks, agenda or templates."), QStringLiteral("name"));
     cli.addOption(tab);
     QCommandLineOption themeOpt(QStringLiteral("theme"),
-                                QStringLiteral("Theme for this run only: light, soft, dark or system."),
+                                QStringLiteral("Theme for this run only: light, soft, dark, system, clean, midnight or paper."),
                                 QStringLiteral("name"));
     cli.addOption(themeOpt);
     cli.process(app);
