@@ -43,7 +43,8 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y ninja-build libgl1-mesa-dev libegl1 libfontconfig1 fonts-dejavu-core \
             libxkbcommon0 libxkbcommon-x11-0 libxcb-cursor0 libxcb-icccm4 libxcb-image0 libxcb-keysyms1 \
-            libxcb-randr0 libxcb-render-util0 libxcb-shape0 libxcb-xinerama0 libxcb-xkb1
+            libxcb-randr0 libxcb-render-util0 libxcb-shape0 libxcb-xinerama0 libxcb-xkb1 \
+            librsvg2-bin
 
       - name: Build
         run: |
@@ -59,18 +60,30 @@ jobs:
       - name: Package AppImage
         env:
           APPIMAGE_EXTRACT_AND_RUN: '1'
-          LDAI_OUTPUT: todomd-${{ env.TAG }}-x86_64.AppImage
-          OUTPUT: todomd-${{ env.TAG }}-x86_64.AppImage # older linuxdeploy name
+          ARCH: x86_64
+          OUT: todomd-${{ env.TAG }}-x86_64.AppImage
         run: |
           DESTDIR=$PWD/AppDir cmake --install build
+          # appimagetool needs a PNG icon (an SVG is no longer accepted for .DirIcon).
+          png=AppDir/usr/share/icons/hicolor/256x256/apps/todomd.png
+          mkdir -p "$(dirname "$png")"
+          rsvg-convert -w 256 -h 256 packaging/todomd.svg -o "$png"
           base=https://github.com/linuxdeploy
           curl -fsSLO $base/linuxdeploy/releases/download/continuous/linuxdeploy-x86_64.AppImage
           curl -fsSLO $base/linuxdeploy-plugin-qt/releases/download/continuous/linuxdeploy-plugin-qt-x86_64.AppImage
-          chmod +x linuxdeploy*.AppImage
-          ./linuxdeploy-x86_64.AppImage --appdir AppDir --plugin qt --output appimage \
+          curl -fsSLO https://github.com/AppImage/appimagetool/releases/download/continuous/appimagetool-x86_64.AppImage
+          chmod +x *.AppImage
+          # Bundle Qt and the libraries, then pack with appimagetool ourselves, so the
+          # top-level icon is the PNG whatever linuxdeploy linked there.
+          ./linuxdeploy-x86_64.AppImage --appdir AppDir --plugin qt \
             --desktop-file AppDir/usr/share/applications/todomd.desktop \
-            --icon-file AppDir/usr/share/icons/hicolor/scalable/apps/todomd.svg
-          ls -la *.AppImage
+            --icon-file "$png"
+          rm -f AppDir/todomd.svg AppDir/todomd.png AppDir/.DirIcon
+          cp "$png" AppDir/todomd.png
+          ln -s todomd.png AppDir/.DirIcon
+          ls -la AppDir
+          ./appimagetool-x86_64.AppImage AppDir "$OUT"
+          ls -la "$OUT"
 
       - name: Smoke test the AppImage
         env:

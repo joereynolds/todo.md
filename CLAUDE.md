@@ -45,8 +45,9 @@ Packaging and releases:
 - Releases: `make release [BUMP=patch|minor|major|x.y.z]` (`release.sh`; `-y` skips the
   prompt) checks master is clean and in sync, runs the tests, bumps `project(todomd VERSION …)`,
   commits, tags `vx.y.z` and pushes both. `.github/workflows/release.yml` refuses a tag that doesn't match,
-  then builds on ubuntu-22.04 (older glibc) with Qt 6.8, runs ctest, packs an AppImage
-  with linuxdeploy + its Qt plugin, and attaches it to a GitHub release.
+  then builds on ubuntu-22.04 (older glibc) with Qt 6.8, runs ctest, bundles Qt with
+  linuxdeploy + its Qt plugin, packs with appimagetool (icon: a 256 px PNG rendered from the SVG,
+  since appimagetool rejects SVG for `.DirIcon`), and attaches it to a GitHub release.
 
 Perf baseline (200k tasks / 5,000 files, generated corpus, every row visible):
 scan+parse ≈ 50 ms, first paint ≈ 120 ms total (the list, the agenda with subtasks, and
