@@ -42,8 +42,9 @@ Packaging and releases:
   must be added to the fileset in `package.nix`, or the nix build won't see them.
   `.github/workflows/nix.yml` runs `nix flake check`, `nix build`, a smoke test and
   the non-flake build on every push.
-- Releases: bump `project(todomd VERSION x.y.z)`, then `git tag vx.y.z && git push
-  origin vx.y.z`. `.github/workflows/release.yml` refuses a tag that doesn't match,
+- Releases: `make release [BUMP=patch|minor|major|x.y.z]` (`release.sh`; `-y` skips the
+  prompt) checks master is clean and in sync, runs the tests, bumps `project(todomd VERSION …)`,
+  commits, tags `vx.y.z` and pushes both. `.github/workflows/release.yml` refuses a tag that doesn't match,
   then builds on ubuntu-22.04 (older glibc) with Qt 6.8, runs ctest, packs an AppImage
   with linuxdeploy + its Qt plugin, and attaches it to a GitHub release.
 
