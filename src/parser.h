@@ -37,6 +37,7 @@ std::unique_ptr<TaskFile> parseFile(const QString &path, const QString &relPath)
 QString setState(const QString &line, TaskState state, const QDate &today);
 QString setDue(const QString &line, const QDate &due); // invalid date removes it
 QString setEta(const QString &line, const QString &eta); // "30m"; empty removes it
+QString addTag(const QString &line, const QString &tag); // "work" -> appends " #work" unless already tagged
 QString setCreated(const QString &line, const QDate &date); // only if it has no +date yet
 QString setContent(const QString &line, const QString &content);
 QString removeDates(const QString &line, QStringView kinds); // kinds: any of "!+x-"

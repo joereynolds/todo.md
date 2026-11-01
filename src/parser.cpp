@@ -402,6 +402,22 @@ QString setEta(const QString &line, const QString &eta)
     return line.left(pl) + content;
 }
 
+QString addTag(const QString &line, const QString &tag)
+{
+    int pl, indent;
+    TaskState st;
+    if (!splitTaskLine(line, &pl, &indent, &st) || tag.isEmpty())
+        return line;
+    Task t;
+    t.content = line.mid(pl);
+    parseMeta(t);
+    for (const QString &x : std::as_const(t.tags)) {
+        if (x.compare(tag, Qt::CaseInsensitive) == 0)
+            return line;
+    }
+    return line.left(pl) + appendToken(t.content, u'#' + tag);
+}
+
 QString setCreated(const QString &line, const QDate &date)
 {
     int pl, indent;

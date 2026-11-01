@@ -289,6 +289,15 @@ void MainWindow::buildActions()
     m_eta = make(tr("Set ET&A…"), QKeySequence(Qt::Key_AsciiTilde), [this] { setEta(); });
     // '~' arrives with Shift on most layouts; accept both forms.
     m_eta->setShortcuts({QKeySequence(Qt::Key_AsciiTilde), QKeySequence(Qt::SHIFT | Qt::Key_AsciiTilde)});
+    m_addTag = make(tr("Add tag…"), QKeySequence(Qt::Key_NumberSign), [this] {
+        // Pop the tag menu up at the current row.
+        QTreeView *v = current().view;
+        const QRect r = v->visualRect(v->currentIndex());
+        const QPoint at = r.isValid() ? v->viewport()->mapToGlobal(r.bottomLeft()) : QCursor::pos();
+        m_tagMenu->exec(at);
+    });
+    // '#' is Shift+3 on US layouts and unshifted on UK ones; accept both forms.
+    m_addTag->setShortcuts({QKeySequence(Qt::Key_NumberSign), QKeySequence(Qt::SHIFT | Qt::Key_NumberSign)});
     m_edit = make(tr("&Edit text"), QKeySequence(Qt::Key_F2), [this] { editText(); });
     m_replace = make(tr("&Replace in selection…"), QKeySequence(Qt::CTRL | Qt::Key_H), [this] { replaceText(); });
     m_add = make(tr("&Add task below…"), QKeySequence(Qt::Key_N), [this] { addTask(false); });
@@ -304,6 +313,8 @@ void MainWindow::buildActions()
         const QPoint at = r.isValid() ? v->viewport()->mapToGlobal(r.bottomLeft()) : QCursor::pos();
         m_templateMenu->exec(at);
     });
+    m_tagMenu = new QMenu(tr("Add ta&g"), this);
+    connect(m_tagMenu, &QMenu::aboutToShow, this, &MainWindow::populateTagMenu);
     m_templateMenu = new QMenu(tr("&Insert template"), this);
     connect(m_templateMenu, &QMenu::aboutToShow, this, &MainWindow::populateTemplateMenu);
     m_copyList = make(tr("&Copy as list"), QKeySequence::Copy, [this] { copyAsList(); });
@@ -421,6 +432,7 @@ void MainWindow::buildUi()
     edit->addActions({m_toggle, m_todo, m_doing, m_done, m_cancel});
     edit->addSeparator();
     edit->addActions({m_due, m_clearDue, m_eta});
+    edit->addMenu(m_tagMenu);
     edit->addSeparator();
     edit->addActions({m_edit, m_replace, m_add, m_addSub, m_delete});
     edit->addSeparator();
@@ -429,6 +441,7 @@ void MainWindow::buildUi()
     edit->addMenu(m_templateMenu);
     edit->addAction(m_saveTemplate);
     edit->addAction(m_insertTemplate);
+    edit->addAction(m_addTag);
 
     QMenu *view = menuBar()->addMenu(tr("&View"));
     view->addActions({m_toggleSidebar, m_tasksTab, m_agendaTab, m_templatesTab});
@@ -1134,6 +1147,45 @@ void MainWindow::setEta()
     runEdits(edits, eta.isEmpty() ? tr("Clear ETA") : tr("Set ETA"));
 }
 
+void MainWindow::populateTagMenu()
+{
+    // Tags already in use (from the tasks store), alphabetical. A tag every selected
+    // task already has is shown checked and disabled.
+    m_tagMenu->clear();
+    const auto tasks = selectedTasks(false);
+    const auto &entries = m_tagIndex->entries();
+    if (entries.empty()) {
+        m_tagMenu->addAction(tr("No tags yet: type #tag in a task"))->setEnabled(false);
+        return;
+    }
+    for (const TagIndex::Entry &e : entries) {
+        const bool all = !tasks.empty() && std::all_of(tasks.cbegin(), tasks.cend(), [&](const Task *t) {
+            return std::any_of(t->tags.cbegin(), t->tags.cend(),
+                               [&](const QString &x) { return x.compare(e.tag, Qt::CaseInsensitive) == 0; });
+        });
+        QString label = u'#' + e.tag;
+        label.replace(u'&', QLatin1String("&&"));
+        QAction *a = m_tagMenu->addAction(label, this, [this, tag = e.tag] { addTag(tag); });
+        a->setCheckable(all);
+        a->setChecked(all);
+        a->setEnabled(!tasks.empty() && !all);
+    }
+}
+
+void MainWindow::addTag(const QString &tag)
+{
+    // Only the selected tasks: subtasks already inherit their ancestors' tags
+    // for filtering, so tagging each of them would just clutter the files.
+    std::vector<Edit> edits;
+    for (const Task *t : selectedTasks(false)) {
+        const QString raw = t->raw();
+        const QString line = parser::addTag(raw, tag);
+        if (line != raw)
+            edits.push_back({t->file->path, t->line, {raw}, {line}});
+    }
+    runEdits(edits, tr("Add tag #%1").arg(tag));
+}
+
 void MainWindow::editText()
 {
     const auto tasks = selectedTasks(false);
@@ -1378,6 +1430,7 @@ void MainWindow::showContextMenu(const QPoint &pos)
     menu.addActions({m_toggle, m_todo, m_doing, m_done, m_cancel});
     menu.addSeparator();
     menu.addActions({m_due, m_clearDue, m_eta});
+    menu.addMenu(m_tagMenu);
     menu.addSeparator();
     menu.addActions({m_edit, m_replace, m_add, m_addSub, m_delete});
     menu.addSeparator();

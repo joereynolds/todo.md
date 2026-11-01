@@ -83,6 +83,8 @@ private:
     void setDue();
     void clearDue();
     void setEta();
+    void addTag(const QString &tag);
+    void populateTagMenu();
     void editText();
     void replaceText();
     void addTask(bool subtask);
@@ -138,12 +140,13 @@ private:
     QAction *m_addDir, *m_reload, *m_quit;
     QAction *m_undo, *m_redo;
     QAction *m_todo, *m_doing, *m_done, *m_cancel, *m_toggle;
-    QAction *m_due, *m_clearDue, *m_eta, *m_edit, *m_replace, *m_add, *m_addSub, *m_delete;
+    QAction *m_due, *m_clearDue, *m_eta, *m_addTag, *m_edit, *m_replace, *m_add, *m_addSub, *m_delete;
     QAction *m_openEditor;
     QAction *m_copyList;
     QAction *m_saveTemplate;
     QAction *m_insertTemplate;
     QMenu *m_templateMenu = nullptr;
+    QMenu *m_tagMenu = nullptr;
     QAction *m_templatesTab;
     std::vector<QAction *> m_tasksOnlyActions; // off on the Templates tab
     TemplatesPage *m_templatesPage = nullptr;

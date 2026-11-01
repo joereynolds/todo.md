@@ -536,6 +536,31 @@ private slots:
     }
 
     // Runs after tagClick: t.md has #home, #work and #work/x.
+    void addTagMenu()
+    {
+        QMenu *menu = nullptr;
+        for (QMenu *m : m_window->findChildren<QMenu *>()) {
+            if (m->title() == QLatin1String("Add ta&g"))
+                menu = m;
+        }
+        QVERIFY(menu);
+        const QByteArray before = contents();
+        select(1); // a, already #home
+        QMetaObject::invokeMethod(menu, "aboutToShow");
+        QStringList labels;
+        for (QAction *a : menu->actions())
+            labels << a->text();
+        QCOMPARE(labels, QStringList({"#home", "#work", "#work/x"}));
+        QVERIFY(menu->actions()[0]->isChecked());
+        QVERIFY(!menu->actions()[0]->isEnabled());
+        QVERIFY(menu->actions()[1]->isEnabled());
+        menu->actions()[1]->trigger();
+        QCOMPARE(contents(), QByteArray(before).replace("- [ ] a #home\n", "- [ ] a #home #work\n"));
+        key(Qt::Key_Z, Qt::ControlModifier);
+        QCOMPARE(contents(), before);
+    }
+
+    // Runs after tagClick: t.md has #home, #work and #work/x.
     void tagCompletionAndCloud()
     {
         auto *sidebar = m_window->findChild<Sidebar *>();

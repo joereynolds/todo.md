@@ -57,7 +57,7 @@ free-text `contains` is the slowest). Re-run `--bench` after touching the load o
 | File | Role |
 |---|---|
 | `src/task.h` | `Task` (incl. `tags`), `TaskFile`, `TaskState`. Both derive from `Node{isFile}`. `Task::listRow` is owned by `TaskListModel`. |
-| `src/parser.*` | Byte-level line parser and pure line transforms (`setState`, `setDue`, `setEta`, `setContent`, `parseEta`). |
+| `src/parser.*` | Byte-level line parser and pure line transforms (`setState`, `setDue`, `setEta`, `addTag`, `setContent`, `parseEta`). |
 | `src/edits.*` | `Edit` (range of lines: expected `before`, replacement `after`), `LineBuffer` (preserves CRLF / trailing newline), `applyEdits()`, which also returns the inverse edits for undo. |
 | `src/templates.*` | List templates (pure, in `todocore`): `.templates/` dir lookup, listing, `fromTasks` (save) and `instantiate` (insert). |
 | `src/editor.*` | Builds the command for "Open in editor" from `$EDITOR` (pure `editor::build`, unit tested). |
@@ -221,6 +221,12 @@ day in the sidebar read "174 days overdue".
   `done:today|yesterday|week|any` matches done tasks by their `x` date (week = last 7 days).
   Explicit `is:` and `done:` terms override the toolbar state toggles (otherwise `done:today`
   would show nothing with Done hidden, the default).
+- Add tag ▸ (context/Edit menu; `#` pops it at the current row): the tags already in use
+  (`TagIndex`, main store), no free text. A tag every selected task has is checked and
+  disabled. `parser::addTag` appends it unless the task has it (case-insensitive). It applies
+  to the selected tasks only, **not** their subtasks — the one exception to the
+  bulk-includes-subtasks rule, since subtasks inherit tags for filtering. New tags are
+  still typed by hand (inline edit / add dialog).
 - Tags column (list and agenda, hidden in the sidebar): chips drawn by `TaskDelegate`
   (`tagRects` is the shared paint/hit-test geometry; overflow shows `+N`, the tooltip lists
   all). Clicking a chip sets the filter to `#tag`; clicking it again when the filter is
@@ -233,15 +239,15 @@ day in the sidebar read "174 days overdue".
   would otherwise also pass Enter to the line edit and submit the half-typed text.
 - Selection is `ExtendedSelection` + `SelectRows`: click-drag, shift and ctrl all work.
 - Shortcuts: Space toggle done · X done · P in progress · T todo · C cancelled ·
-  D due date · Shift+D clear due · ~ set ETA (number + unit dialog) · Ctrl+B sidebar · F2/double-click edit (multi-select →
+  D due date · Shift+D clear due · ~ set ETA (number + unit dialog) · # add tag (menu) · Ctrl+B sidebar · F2/double-click edit (multi-select →
   replace dialog) · Ctrl+H find/replace · N add task below · Shift+N add subtask · Del delete ·
   E open in `$EDITOR` · Ctrl+C copy as list · Ctrl+T insert template · Ctrl+3 templates tab · Ctrl+F or / filter (Esc clears, ↓ back to list) ·
   Alt+1..4 show todo/doing/done/cancelled · Ctrl+1/2/3 tabs · ←/→ collapse/expand ·
   Ctrl+. expand all · Ctrl+, collapse all groups (current tab) · Ctrl+Z / Ctrl+Shift+Z undo/redo ·
   Ctrl+O add directory · F5 reload.
   Single-key shortcuts are window-wide. `QLineEdit` eats printable keys via
-  ShortcutOverride, so typing in the filter or the inline editor is safe. `~` is bound
-  with and without Shift, because layouts differ.
+  ShortcutOverride, so typing in the filter or the inline editor is safe. `~` and `#` are
+  bound with and without Shift, because layouts differ.
 - List templates: markdown files in `.templates/` of the first root that has one, else the
   first root (`templates::dirFor`). Hidden, so the scanner never shows them as tasks.
   "Save as template…" (context/Edit menu) saves the selected tasks + subtasks: reset to

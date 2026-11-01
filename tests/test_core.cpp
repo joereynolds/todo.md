@@ -169,6 +169,15 @@ private slots:
         QCOMPARE(parser::setEta("- [ ] ~2m a", ""), QString("- [ ] a"));
     }
 
+    void addTag()
+    {
+        QCOMPARE(parser::addTag("- [ ] a", "work"), QString("- [ ] a #work"));
+        QCOMPARE(parser::addTag("- [ ] a !2026-01-02 ", "x"), QString("- [ ] a !2026-01-02 #x"));
+        QCOMPARE(parser::addTag("- [ ] a #Work, b", "work"), QString("- [ ] a #Work, b")); // already there
+        QCOMPARE(parser::addTag("- [ ] a #work/meeting", "work"), QString("- [ ] a #work/meeting #work"));
+        QCOMPARE(parser::addTag("not a task", "work"), QString("not a task"));
+    }
+
     void tags()
     {
         auto f = parser::parse("/a.md", "a.md",
