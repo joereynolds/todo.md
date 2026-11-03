@@ -71,16 +71,6 @@ It also supports subtasks. Subtasks are just arbitrarily nested tasks.
   - [ ] Take bins out ~2m
 ```
 
-### Templates
-
-Lists you use again and again (packing, a weekly review, errands before a trip) can
-be saved as templates: select the tasks, right-click › *Save as template…*. Insert
-one anywhere with right-click › *Insert template* (or Ctrl+T). Templates are plain
-markdown files in a hidden `.templates/` folder in your notes directory. The
-*Templates* tab (Ctrl+3) shows them as task lists you edit like any other (N to add,
-F2 to edit, Del to remove…), with buttons to create, rename and delete templates.
-You can also edit the files by hand.
-
 You don't really need to know any of this if you're managing it through the UI
 but if you want to edit them by hand, the above is useful.
 
