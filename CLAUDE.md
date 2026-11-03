@@ -61,6 +61,10 @@ free-text `contains` is the slowest). Re-run `--bench` after touching the load o
 | `src/task.h` | `Task` (incl. `tags`), `TaskFile`, `TaskState`. Both derive from `Node{isFile}`. `Task::listRow` is owned by `TaskListModel`. |
 | `src/parser.*` | Byte-level line parser and pure line transforms (`setState`, `setDue`, `setEta`, `addTag`, `setContent`, `parseEta`). |
 | `src/edits.*` | `Edit` (range of lines: expected `before`, replacement `after`), `LineBuffer` (preserves CRLF / trailing newline), `applyEdits()`, which also returns the inverse edits for undo. |
+| `src/query.*` | `Query` (pure, in `todocore`): a filter query split into the builder's parts (tags any/all, due, states, done, one ETA) plus `other` terms kept as typed; `parse` / `toString` round-trip. |
+| `src/querybuilder.*` | `QueryBuilder` (chips that build a query, two-way with a text box via `queryChanged` / `setQuery`), `Chip`, a flow layout. |
+| `src/viewbar.*` | `ViewBar`: the saved views as chips in the tab row's corner, with overflow into "More ▾". |
+| `src/views.*` | `ViewList`: saved views (name + filter query) in QSettings, add/update/remove/move. |
 | `src/templates.*` | List templates (pure, in `todocore`): `.templates/` dir lookup, listing, `fromTasks` (save) and `instantiate` (insert). |
 | `src/editor.*` | Builds the command for "Open in editor" from `$EDITOR` (pure `editor::build`, unit tested). |
 | `src/store.*` | `TaskStore`: several roots, async load (thread pool), `QFileSystemWatcher` sync, the **only** writer to disk, undo/redo. |
@@ -227,7 +231,27 @@ day in the sidebar read "174 days overdue".
   Subtasks inherit their ancestors' tags for filtering (the Tags column shows only a task's own).
   `done:today|yesterday|week|any` matches done tasks by their `x` date (week = last 7 days).
   Explicit `is:` and `done:` terms override the toolbar state toggles (otherwise `done:today`
-  would show nothing with Done hidden, the default).
+  would show nothing with Done hidden, the default). `a|b` within one term means either
+  (`#music|#video`, `due:overdue|due:week`): each alternative is parsed as a `TaskFilter` of
+  its own (`m_anyOf`); an `is:`/`done:` inside one also overrides the toggles.
+- Filter builder: **Choose ▾** next to the filter box (Ctrl+Shift+F) opens a popup `QueryBuilder`;
+  the view dialog embeds one under its filter field. Chips: tags with open counts (+ any/all
+  switch; any = `#a|#b`, all = `#a #b`), due, state, completed (multi-select, OR'd), estimate
+  (single). Each click rewrites the text at once (`Query::toString`: chip terms first, then the
+  user's other terms); typing in the text sets the chips (`setQuery`, on `textEdited` only, so
+  the builder's own writes don't loop back). In the popup each click also applies the filter.
+- Views (saved filters): `ViewList` (`src/views.*`, QSettings array `views`: name + query, in
+  the user's order). Applying one sets the filter box to its query (so it's just a filter;
+  the active view is whichever query equals the box, `indexOfQuery`). They're shown in the tab
+  row (the user asked for them to be more visible, but set apart from the tabs): `ViewBar`, the
+  `QTabWidget`'s top-right corner widget — divider, dim "Views" label, a `Chip` per view (count =
+  `countMatching`, i.e. done and cancelled left out unless the query asks; checked = active),
+  "+" / "+ New view". Chips that don't fit the space after the last tab (`fitViewBar` on resize)
+  go to "More ▾"; the active one always shows. Click = apply / clear (from the Templates tab it
+  switches to Tasks), right-click = Edit… / Move up / Move down / Delete…. Views menu: New view… (Ctrl+S, prefilled with the
+  current filter), Edit/Delete the active view, the views with Ctrl+Alt+1..9 (toggle).
+  `ViewDialog`: name (unique, case-insensitive) + query (tag completion) + `QueryBuilder` + live count. Delete
+  asks first and clears the filter if that view was showing.
 - Add tag ▸ (context/Edit menu; `#` pops it at the current row): the tags already in use
   (`TagIndex`, main store), no free text. A tag every selected task has is checked and
   disabled. `parser::addTag` appends it unless the task has it (case-insensitive). It applies
@@ -258,7 +282,7 @@ day in the sidebar read "174 days overdue".
   E open in `$EDITOR` · Ctrl+C copy as list · Ctrl+T insert template · Ctrl+3 templates tab · Ctrl+F or / filter (Esc clears, ↓ back to list) ·
   Alt+1..4 show todo/doing/done/cancelled · Ctrl+1/2/3 tabs · ←/→ collapse/expand ·
   Ctrl+. expand all · Ctrl+, collapse all groups (current tab) · Ctrl+Z / Ctrl+Shift+Z undo/redo ·
-  Ctrl+O add directory · F5 reload.
+  Ctrl+O add directory · F5 reload · Ctrl+S new view · Ctrl+Alt+1..9 apply view · Ctrl+Shift+F filter builder.
   Single-key shortcuts are window-wide. `QLineEdit` eats printable keys via
   ShortcutOverride, so typing in the filter or the inline editor is safe. `~` and `#` are
   bound with and without Shift, because layouts differ.
@@ -298,7 +322,7 @@ day in the sidebar read "174 days overdue".
 - Settings live in `QSettings("todomd", "todomd")` (`~/.config/todomd/todomd.conf`):
   `directories` (list; migrated from the old `lastDirectory`), geometry, tab, state
   filters (done and cancelled hidden by default), `view/theme` (default `light`; also `soft`, `dark`, `system`,
-  `clean`, `midnight`, `paper`; the user has `system` saved), `view/collapsed`, `view/agendaCollapsed`, `view/sidebar`,
+  `clean`, `midnight`, `paper`; the user has `system` saved), `views` (array), `view/collapsed`, `view/agendaCollapsed`, `view/sidebar`,
   `view/splitter`, `agenda/emptyDays`.
 
 ## File watching

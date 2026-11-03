@@ -5,6 +5,9 @@
 #include "store.h"
 #include "dialogs.h"
 #include "sidebar.h"
+#include "views.h"
+#include "viewbar.h"
+#include "querybuilder.h"
 #include "taskview.h"
 #include "templatespage.h"
 
@@ -652,6 +655,160 @@ private slots:
         });
         emit m_view->customContextMenuRequested(plain);
         QCOMPARE(QApplication::clipboard()->text(), QString("https://b.io"));
+    }
+
+    // After links(): t.md is "Read the spec now" / "see https://a.io and https://b.io".
+    void views()
+    {
+        QLineEdit *filter = nullptr;
+        for (QLineEdit *e : m_window->findChildren<QLineEdit *>()) {
+            if (e->placeholderText().startsWith("Filter"))
+                filter = e;
+        }
+        QVERIFY(filter);
+        auto *bar = m_window->findChild<ViewBar *>();
+        QVERIFY(bar);
+        auto viewButtons = [&] {
+            QStringList out;
+            for (Chip *c : bar->chips())
+                out << c->key(); // the query
+            return out;
+        };
+        QCOMPARE(viewButtons(), QStringList());
+
+        // Ctrl+S: a new view from the current filter; it's applied on save.
+        filter->setText("spec");
+        QTimer::singleShot(100, this, [] {
+            auto *dlg = qobject_cast<ViewDialog *>(QApplication::activeModalWidget());
+            QVERIFY(dlg);
+            QCOMPARE(dlg->queryEdit()->text(), QString("spec"));
+            auto *ok = dlg->findChild<QDialogButtonBox *>()->button(QDialogButtonBox::Ok);
+            QVERIFY(!ok->isEnabled()); // no name yet
+            dlg->nameEdit()->setText("Reading");
+            dlg->queryEdit()->setText("spec|a.io");
+            QVERIFY(ok->isEnabled());
+            ok->click();
+        });
+        key(Qt::Key_S, Qt::ControlModifier);
+        QCOMPARE(filter->text(), QString("spec|a.io"));
+        QCOMPARE(m_view->model()->rowCount(), 3); // header + both tasks (or)
+        QCOMPARE(viewButtons(), QStringList({"spec|a.io"}));
+
+        // Ctrl+Alt+1 toggles it: on again clears, then applies.
+        key(Qt::Key_1, Qt::ControlModifier | Qt::AltModifier);
+        QCOMPARE(filter->text(), QString());
+        key(Qt::Key_1, Qt::ControlModifier | Qt::AltModifier);
+        QCOMPARE(filter->text(), QString("spec|a.io"));
+        QVERIFY(bar->chips()[0]->isChecked());
+
+        // Clicking the chip in the tab row clears, again applies; from Templates it goes to Tasks.
+        QTest::mouseClick(bar->chips()[0], Qt::LeftButton);
+        QCOMPARE(filter->text(), QString());
+        QVERIFY(!bar->chips()[0]->isChecked());
+        auto *tabs = m_window->findChild<QTabWidget *>();
+        tabs->setCurrentIndex(2);
+        QTest::mouseClick(bar->chips()[0], Qt::LeftButton);
+        QCOMPARE(filter->text(), QString("spec|a.io"));
+        QCOMPARE(tabs->currentIndex(), 0);
+        QVERIFY(bar->chips()[0]->isChecked());
+
+        // A second view can't reuse the name.
+        QTimer::singleShot(100, this, [] {
+            auto *dlg = qobject_cast<ViewDialog *>(QApplication::activeModalWidget());
+            QVERIFY(dlg);
+            dlg->nameEdit()->setText("reading");
+            QVERIFY(!dlg->findChild<QDialogButtonBox *>()->button(QDialogButtonBox::Ok)->isEnabled());
+            dlg->reject();
+        });
+        key(Qt::Key_S, Qt::ControlModifier);
+
+        // Edit the active view (Views menu): the new filter is applied.
+        QAction *edit = nullptr, *del = nullptr;
+        for (QAction *a : m_window->findChildren<QAction *>()) {
+            if (a->text().startsWith("&Edit view"))
+                edit = a;
+            if (a->text().startsWith("&Delete view"))
+                del = a;
+        }
+        QVERIFY(edit && del);
+        QTimer::singleShot(100, this, [] {
+            auto *dlg = qobject_cast<ViewDialog *>(QApplication::activeModalWidget());
+            QVERIFY(dlg);
+            QCOMPARE(dlg->nameEdit()->text(), QString("Reading"));
+            dlg->queryEdit()->setText("b.io");
+            dlg->findChild<QDialogButtonBox *>()->button(QDialogButtonBox::Ok)->click();
+        });
+        edit->trigger();
+        QCOMPARE(filter->text(), QString("b.io"));
+        QCOMPARE(m_view->model()->rowCount(), 2);
+
+        // Saved in the settings.
+        ViewList reloaded;
+        QCOMPARE(reloaded.views().size(), size_t(1));
+        QCOMPARE(reloaded.views()[0].name, QString("Reading"));
+        QCOMPARE(reloaded.views()[0].query, QString("b.io"));
+
+        // Delete (confirmed): gone, and the filter it had applied is cleared.
+        QTimer::singleShot(100, this, [] {
+            auto *box = qobject_cast<QMessageBox *>(QApplication::activeModalWidget());
+            QVERIFY(box);
+            box->button(QMessageBox::Yes)->click();
+        });
+        del->trigger();
+        QCOMPARE(filter->text(), QString());
+        QCOMPARE(viewButtons(), QStringList());
+        QCOMPARE(ViewList().views().size(), size_t(0));
+    }
+
+    // Choose ▾ (Ctrl+Shift+F): chips edit the filter box live, and the box's text
+    // sets the chips when it opens. The view dialog has the same builder.
+    void filterBuilder()
+    {
+        QLineEdit *filter = nullptr;
+        for (QLineEdit *e : m_window->findChildren<QLineEdit *>()) {
+            if (e->placeholderText().startsWith("Filter"))
+                filter = e;
+        }
+        QVERIFY(filter);
+        auto chip = [](QueryBuilder *b, const QString &text) -> Chip * {
+            for (Chip *c : b->chips()) {
+                if (c->text() == text)
+                    return c;
+            }
+            return nullptr;
+        };
+        filter->setText("~<=15m spec");
+        key(Qt::Key_F, Qt::ControlModifier | Qt::ShiftModifier);
+        auto *b = m_window->findChild<QueryBuilder *>();
+        QVERIFY(b && b->isVisible());
+        QVERIFY(chip(b, "≤ 15m")->isChecked());
+        QTest::mouseClick(chip(b, "In progress"), Qt::LeftButton);
+        QCOMPARE(filter->text(), QString("is:doing ~<=15m spec")); // words kept, chips normalised first
+        QTest::mouseClick(chip(b, "To do"), Qt::LeftButton);
+        QCOMPARE(filter->text(), QString("is:doing|is:todo ~<=15m spec"));
+        QTest::mouseClick(chip(b, "≤ 15m"), Qt::LeftButton); // estimate is single choice: off again
+        QCOMPARE(filter->text(), QString("is:doing|is:todo spec"));
+        QTest::mouseClick(chip(b, "> 1h"), Qt::LeftButton);
+        QTest::mouseClick(chip(b, "None"), Qt::LeftButton); // replaces > 1h
+        QCOMPARE(filter->text(), QString("is:doing|is:todo ~none spec"));
+        b->window()->close();
+        filter->clear();
+
+        // In the view dialog: clicks write the filter field, typing there sets the chips.
+        QTimer::singleShot(100, this, [chip] {
+            auto *dlg = qobject_cast<ViewDialog *>(QApplication::activeModalWidget());
+            QVERIFY(dlg && dlg->builder());
+            QTest::mouseClick(chip(dlg->builder(), "Overdue"), Qt::LeftButton);
+            QTest::mouseClick(chip(dlg->builder(), "Next 7 days"), Qt::LeftButton);
+            QCOMPARE(dlg->queryEdit()->text(), QString("due:overdue|due:week"));
+            dlg->queryEdit()->setFocus();
+            QTest::keyClicks(dlg->queryEdit(), " is:doing");
+            QVERIFY(chip(dlg->builder(), "In progress")->isChecked());
+            QTest::mouseClick(chip(dlg->builder(), "Overdue"), Qt::LeftButton);
+            QCOMPARE(dlg->queryEdit()->text(), QString("due:week is:doing"));
+            dlg->reject();
+        });
+        key(Qt::Key_S, Qt::ControlModifier);
     }
 };
 

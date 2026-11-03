@@ -50,10 +50,18 @@ private:
     std::vector<EtaCond> m_textConds, m_presetConds;
     std::vector<Due> m_due;
     std::vector<Done> m_done;
+    // "a|b" terms: each alternative is a filter of its own (all states visible);
+    // the term holds when any alternative matches.
+    std::vector<std::vector<TaskFilter>> m_anyOf;
+    bool m_anyOfStates = false; // an alternative has is:/done:, so the toolbar toggles don't apply
     unsigned m_isMask = 0; // from is: terms, 0 = no constraint
     unsigned m_states = 0xF;
     QDate m_today;
 };
+
+// Tasks in the store matching a filter query, with done and cancelled tasks
+// left out unless the query asks for them (is:, done:). Used for view counts.
+int countMatching(const TaskStore &store, const QString &query);
 
 // Every tag in the store with its task counts, rebuilt on each store change.
 // A task counts towards its own tags and every parent of a nested one

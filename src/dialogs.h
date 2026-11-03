@@ -3,6 +3,8 @@
 #include <QDate>
 #include <QDialog>
 
+#include <functional>
+
 class QCalendarWidget;
 class QCheckBox;
 class QComboBox;
@@ -11,6 +13,8 @@ class QLabel;
 class QLineEdit;
 class QPushButton;
 class QSpinBox;
+class QueryBuilder;
+class TagIndex;
 
 class DueDateDialog : public QDialog
 {
@@ -61,6 +65,32 @@ public:
 private:
     QLineEdit *m_find, *m_replace;
     QCheckBox *m_regex, *m_case;
+};
+
+// Create / edit a saved view: a name and a filter query, with a live count of
+// what it matches (countFor) and a check that the name is free (nameTaken).
+class ViewDialog : public QDialog
+{
+    Q_OBJECT
+public:
+    ViewDialog(const QString &title, const QString &name, const QString &query,
+               std::function<int(const QString &)> countFor, std::function<bool(const QString &)> nameTaken,
+               TagIndex *tags = nullptr, QWidget *parent = nullptr);
+    QString name() const;
+    QString query() const;
+    QLineEdit *nameEdit() const { return m_name; }
+    QLineEdit *queryEdit() const { return m_query; }
+    QueryBuilder *builder() const { return m_builder; }
+
+private:
+    void validate();
+
+    QLineEdit *m_name, *m_query;
+    QueryBuilder *m_builder = nullptr;
+    QLabel *m_status;
+    QPushButton *m_ok;
+    std::function<int(const QString &)> m_countFor;
+    std::function<bool(const QString &)> m_nameTaken;
 };
 
 // Picks an ETA as a number and a unit. eta() is e.g. "15m", or empty when

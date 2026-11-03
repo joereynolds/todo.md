@@ -19,6 +19,7 @@ add_library(todocore STATIC
     src/edits.h src/edits.cpp
     src/editor.h src/editor.cpp
     src/templates.h src/templates.cpp
+    src/query.h src/query.cpp
 )
 target_include_directories(todocore PUBLIC src)
 target_link_libraries(todocore PUBLIC Qt6::Core)
@@ -33,6 +34,9 @@ add_library(todoapp STATIC
     src/sidebar.h src/sidebar.cpp
     src/tagcompleter.h src/tagcompleter.cpp
     src/templatespage.h src/templatespage.cpp
+    src/views.h src/views.cpp
+    src/querybuilder.h src/querybuilder.cpp
+    src/viewbar.h src/viewbar.cpp
     src/mainwindow.h src/mainwindow.cpp
 )
 target_link_libraries(todoapp PUBLIC todocore Qt6::Widgets PRIVATE Qt6::Concurrent)

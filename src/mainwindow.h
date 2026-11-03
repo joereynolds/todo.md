@@ -14,6 +14,11 @@ class AgendaModel;
 class QSplitter;
 class Sidebar;
 class TagIndex;
+class ViewList;
+class ViewBar;
+class QueryBuilder;
+class QFrame;
+class QToolButton;
 class TemplatesPage;
 class QAction;
 class QActionGroup;
@@ -45,6 +50,7 @@ public:
 
 protected:
     void closeEvent(QCloseEvent *event) override;
+    bool eventFilter(QObject *watched, QEvent *event) override;
 
 private:
     struct Pane {
@@ -116,7 +122,27 @@ private:
     void updateUndoActions();
     void showContextMenu(const QPoint &pos);
 
+    // Saved views (ViewList): applying one sets the filter box to its query.
+    int activeView() const; // the view whose query is in the filter box, -1 if none
+    void applyView(int index); // toggles: applying the active view clears the filter
+    void newView();
+    void editView(int index);
+    void deleteView(int index);
+    void populateViewsMenu();
+    void showFilterBuilder();
+    void fitViewBar(); // the Choose ▾ popup: chips that edit the filter box live
+    void showViewMenu(int index, const QPoint &globalPos);
+
     TaskStore *m_store;
+    ViewList *m_viewList = nullptr;
+    QMenu *m_viewsMenu = nullptr;
+    ViewBar *m_viewBar = nullptr;
+    QFrame *m_builderPopup = nullptr;
+    QueryBuilder *m_builder = nullptr;
+    QToolButton *m_chooseButton = nullptr;
+    QAction *m_chooseFilter = nullptr;
+    QAction *m_newView = nullptr, *m_editView = nullptr, *m_deleteView = nullptr;
+    std::vector<QAction *> m_viewShortcuts; // Ctrl+Alt+1..9
     TaskListModel *m_listModel;
     AgendaModel *m_agendaModel;
     TaskStore *m_templateStore;

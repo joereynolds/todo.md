@@ -69,9 +69,23 @@ void TaskFilter::setText(const QString &text)
     m_textConds.clear();
     m_due.clear();
     m_done.clear();
+    m_anyOf.clear();
+    m_anyOfStates = false;
     m_isMask = 0;
     m_today = QDate::currentDate();
     for (const QString &term : text.split(u' ', Qt::SkipEmptyParts)) {
+        if (term.contains(u'|')) {
+            std::vector<TaskFilter> alts;
+            for (const QString &alt : term.split(u'|', Qt::SkipEmptyParts)) {
+                TaskFilter f;
+                f.setText(alt);
+                m_anyOfStates = m_anyOfStates || f.m_isMask || !f.m_done.empty() || f.m_anyOfStates;
+                alts.push_back(std::move(f));
+            }
+            if (!alts.empty())
+                m_anyOf.push_back(std::move(alts));
+            continue;
+        }
         EtaCond c;
         if (parseEtaCond(term, &c)) {
             m_textConds.push_back(c);
@@ -134,7 +148,8 @@ void TaskFilter::setStateVisible(TaskState state, bool visible)
 
 bool TaskFilter::narrows() const
 {
-    return !m_terms.isEmpty() || !m_tags.isEmpty() || !m_textConds.empty() || !m_presetConds.empty() || !m_due.empty() || !m_done.empty() || m_isMask;
+    return !m_terms.isEmpty() || !m_tags.isEmpty() || !m_textConds.empty() || !m_presetConds.empty() || !m_due.empty()
+           || !m_done.empty() || !m_anyOf.empty() || m_isMask;
 }
 
 bool TaskFilter::showsEverything() const
@@ -145,7 +160,7 @@ bool TaskFilter::showsEverything() const
 bool TaskFilter::matches(const Task &t) const
 {
     const unsigned bit = 1u << int(t.state);
-    if (m_isMask || !m_done.empty()) {
+    if (m_isMask || !m_done.empty() || m_anyOfStates) {
         // An explicit state term decides on its own; the toolbar toggles don't apply.
         if (m_isMask && !(m_isMask & bit))
             return false;
@@ -200,7 +215,25 @@ bool TaskFilter::matches(const Task &t) const
         if (!t.content.contains(term, Qt::CaseInsensitive) && !t.file->relPath.contains(term, Qt::CaseInsensitive))
             return false;
     }
+    for (const auto &alts : m_anyOf) {
+        if (!std::any_of(alts.cbegin(), alts.cend(), [&](const TaskFilter &f) { return f.matches(t); }))
+            return false;
+    }
     return true;
+}
+
+int countMatching(const TaskStore &store, const QString &query)
+{
+    TaskFilter f;
+    f.setText(query);
+    f.setStateVisible(TaskState::Done, false);
+    f.setStateVisible(TaskState::Cancelled, false);
+    int n = 0;
+    for (const auto &file : store.files()) {
+        for (const Task &t : file->tasks)
+            n += f.matches(t) ? 1 : 0;
+    }
+    return n;
 }
 
 TagIndex::TagIndex(TaskStore *store, QObject *parent) : QObject(parent), m_store(store)

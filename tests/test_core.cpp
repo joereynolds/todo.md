@@ -1,6 +1,7 @@
 #include "edits.h"
 #include "editor.h"
 #include "parser.h"
+#include "query.h"
 #include "templates.h"
 
 #include <QDir>
@@ -198,6 +199,42 @@ private slots:
         QCOMPARE(f->tasks[0].text, QString("Check PR https://ci.io"));
         QCOMPARE(f->tasks[0].links.size(), size_t(2));
         QCOMPARE(f->tasks[0].links[1].start, 9);
+    }
+
+    void queryParts()
+    {
+        Query q = Query::parse("#music|#video due:overdue|due:week is:todo ~<=15m report done:today");
+        QCOMPARE(q.tags, QStringList({"music", "video"}));
+        QVERIFY(!q.allTags);
+        QCOMPARE(q.due, QStringList({"overdue", "week"}));
+        QCOMPARE(q.states, QStringList({"todo"}));
+        QCOMPARE(q.done, QStringList({"today"}));
+        QCOMPARE(q.eta, QString("<=15m"));
+        QCOMPARE(q.other, QStringList({"report"}));
+        QCOMPARE(q.toString(), QString("#music|#video due:overdue|due:week is:todo done:today ~<=15m report"));
+
+        q = Query::parse("#a #b");
+        QCOMPARE(q.tags, QStringList({"a", "b"}));
+        QVERIFY(q.allTags);
+        QCOMPARE(q.toString(), QString("#a #b"));
+        q.allTags = false;
+        QCOMPARE(q.toString(), QString("#a|#b"));
+
+        // Mixed any/all, repeats and unknown values are kept as typed.
+        q = Query::parse("#a|#b #c due:week due:today is:nope ~1h ~2h");
+        QCOMPARE(q.tags, QStringList({"a", "b"}));
+        QCOMPARE(q.due, QStringList({"week"}));
+        QCOMPARE(q.eta, QString("1h"));
+        QCOMPARE(q.other, QStringList({"#c", "due:today", "is:nope", "~2h"}));
+        QCOMPARE(Query::parse(q.toString()).toString(), q.toString());
+
+        // Building up from nothing.
+        Query b;
+        QCOMPARE(b.toString(), QString());
+        b.tags << "work";
+        b.states << "todo" << "doing";
+        QCOMPARE(b.toString(), QString("#work is:todo|is:doing"));
+        QCOMPARE(Query::parse("").toString(), QString());
     }
 
     void addTag()

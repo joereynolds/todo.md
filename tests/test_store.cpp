@@ -324,6 +324,38 @@ private slots:
         QVERIFY(plain.narrows());
     }
 
+    void orTerms()
+    {
+        const QString d = QDate::currentDate().addDays(3).toString(Qt::ISODate);
+        const QString late = QDate::currentDate().addDays(-2).toString(Qt::ISODate);
+        auto f = parser::parse("/o.md", "o.md",
+                               QStringLiteral("- [ ] song #music\n- [ ] clip #video ~5m\n- [ ] pic #photography\n"
+                                              "- [ ] tax #admin !%1\n- [ ] late #admin !%2\n- [x] old #music\n- [/] mix #music\n")
+                                   .arg(d, late)
+                                   .toUtf8());
+        auto names = [&](const QString &text) {
+            TaskFilter filter;
+            filter.setText(text);
+            filter.setStateVisible(TaskState::Done, false); // the toolbar default
+            filter.setStateVisible(TaskState::Cancelled, false);
+            QStringList out;
+            for (const Task &t : f->tasks) {
+                if (filter.matches(t))
+                    out << t.text;
+            }
+            return out;
+        };
+        QCOMPARE(names("#music|#video|#photography"), QStringList({"song", "clip", "pic", "mix"}));
+        QCOMPARE(names("#music|#video ~<=5m"), QStringList({"clip"})); // AND across terms
+        QCOMPARE(names("due:overdue|due:week"), QStringList({"tax", "late"}));
+        QCOMPARE(names("#music|#nope|"), QStringList({"song", "mix"})); // empty alternatives ignored
+        // is:/done: inside an alternative override the toolbar toggles, as on their own.
+        QCOMPARE(names("is:done|is:doing"), QStringList({"old", "mix"}));
+        TaskFilter any;
+        any.setText("#a|#b");
+        QVERIFY(any.narrows());
+    }
+
     void bulkEditUndoRedo()
     {
         const QByteArray before = read(path("a.md"));

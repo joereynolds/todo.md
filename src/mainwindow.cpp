@@ -11,6 +11,9 @@
 #include "templatespage.h"
 #include "taskview.h"
 #include "theme.h"
+#include "views.h"
+#include "querybuilder.h"
+#include "viewbar.h"
 
 #include <QAction>
 #include <QActionGroup>
@@ -31,7 +34,11 @@
 #include <QLabel>
 #include <QLineEdit>
 #include <QListWidget>
+#include <QFrame>
+#include <QScreen>
+#include <QToolButton>
 #include <QMenu>
+#include <QTabBar>
 #include <QMenuBar>
 #include <QMessageBox>
 #include <QProcess>
@@ -150,6 +157,7 @@ MainWindow::MainWindow(TaskStore *store, QWidget *parent) : QMainWindow(parent),
     m_templates.model = m_templateModel;
     m_templates.store = m_templateStore;
     m_tagIndex = new TagIndex(store, this);
+    m_viewList = new ViewList(this);
     m_sidebar = new Sidebar(store, m_tagIndex, this);
     new TagCompleter(m_tagIndex, m_sidebar->addBox());
 
@@ -367,6 +375,18 @@ void MainWindow::buildActions()
     // Task actions work on the Templates tab too (it's a task list); these don't.
     m_tasksOnlyActions = {m_saveTemplate, m_insertTemplate};
 
+    m_chooseFilter = make(tr("Choose ▾"), QKeySequence(Qt::CTRL | Qt::SHIFT | Qt::Key_F), [this] { showFilterBuilder(); });
+    m_chooseFilter->setToolTip(tr("Pick tags, dates, states and estimates to filter by (Ctrl+Shift+F)"));
+    m_newView = make(tr("&New view…"), QKeySequence(Qt::CTRL | Qt::Key_S), [this] { newView(); });
+    m_newView->setToolTip(tr("Save a filter as a view (starts from the current filter)"));
+    m_editView = make(tr("&Edit view…"), QKeySequence(), [this] { editView(activeView()); });
+    m_deleteView = make(tr("&Delete view…"), QKeySequence(), [this] { deleteView(activeView()); });
+    for (int i = 0; i < 9; ++i) {
+        QAction *a = make(QString(), QKeySequence(Qt::CTRL | Qt::ALT | (Qt::Key_1 + i)), [this, i] { applyView(i); });
+        a->setCheckable(true);
+        m_viewShortcuts.push_back(a);
+    }
+
     m_themeGroup = new QActionGroup(this);
     const QString current = s.value(QStringLiteral("view/theme"), QStringLiteral("light")).toString();
     for (const auto &[name, label] : {std::pair{QStringLiteral("light"), tr("&Light")},
@@ -459,6 +479,9 @@ void MainWindow::buildUi()
     QMenu *themes = view->addMenu(tr("T&heme"));
     themes->addActions(m_themeGroup->actions());
 
+    m_viewsMenu = menuBar()->addMenu(tr("Vie&ws"));
+    connect(m_viewsMenu, &QMenu::aboutToShow, this, &MainWindow::populateViewsMenu);
+
     QToolBar *bar = addToolBar(tr("Main"));
     bar->setObjectName(QStringLiteral("main"));
     bar->setMovable(false);
@@ -467,7 +490,7 @@ void MainWindow::buildUi()
     bar->addSeparator();
     m_filter = new QLineEdit(this);
     m_filter->setPlaceholderText(tr("Filter: words, paths, !2026-11, ~<=15m …  (Ctrl+F or /)"));
-    m_filter->setToolTip(tr("Space separated terms, all must match.\n"
+    m_filter->setToolTip(tr("Space separated terms, all must match; a|b matches either (#music|#video).\n"
                             "ETA: ~<=15m  ~<1h  ~>2h  ~>=1d  ~30m  ~none  ~any\n"
                             "Due: due:overdue  due:today  due:week  due:none  due:any\n"
                             "State: is:todo  is:doing  is:done  is:cancelled  is:open\n"
@@ -477,6 +500,11 @@ void MainWindow::buildUi()
     m_filter->installEventFilter(new FilterKeys(m_filter, [this] { return current().view; }));
     new TagCompleter(m_tagIndex, m_filter);
     bar->addWidget(m_filter);
+    m_chooseButton = new QToolButton(this);
+    m_chooseButton->setDefaultAction(m_chooseFilter);
+    m_chooseButton->setToolButtonStyle(Qt::ToolButtonTextOnly);
+    m_chooseButton->setFocusPolicy(Qt::NoFocus);
+    bar->addWidget(m_chooseButton);
     m_etaFilter = new QComboBox(this);
     for (const EtaPreset &p : etaPresets())
         m_etaFilter->addItem(tr(p.label));
@@ -554,6 +582,18 @@ void MainWindow::buildUi()
     h->hideSection(TaskListModel::DueColumn);
     m_templatesPage = new TemplatesPage(m_templates.view, this);
     m_tabs->addTab(m_templatesPage, tr("Templates"));
+    // Saved views on the right of the tab row, set apart by a divider.
+    m_viewBar = new ViewBar(m_viewList, m_store, m_tabs);
+    m_tabs->setCornerWidget(m_viewBar, Qt::TopRightCorner);
+    m_tabs->installEventFilter(this); // re-fit the view chips on resize
+    connect(m_viewBar, &ViewBar::applyRequested, this, [this](int index) {
+        if (onTemplatesTab()) // views filter tasks, not templates
+            m_tabs->setCurrentIndex(0);
+        applyView(index);
+    });
+    connect(m_viewBar, &ViewBar::newRequested, this, &MainWindow::newView);
+    connect(m_viewBar, &ViewBar::menuRequested, this, &MainWindow::showViewMenu);
+    connect(m_viewList, &ViewList::changed, this, &MainWindow::fitViewBar);
     connect(m_templatesPage, &TemplatesPage::newRequested, this, &MainWindow::newTemplate);
     connect(m_templatesPage, &TemplatesPage::renameRequested, this, &MainWindow::renameTemplate);
     connect(m_templatesPage, &TemplatesPage::deleteRequested, this, &MainWindow::deleteTemplate);
@@ -711,12 +751,166 @@ void MainWindow::setFilterText(const QString &text)
     forEachFilter([&](TaskFilter &f) { f.setText(text); });
 }
 
+int MainWindow::activeView() const
+{
+    return m_viewList->indexOfQuery(m_filter->text());
+}
+
+void MainWindow::applyView(int index)
+{
+    const auto &views = m_viewList->views();
+    if (index < 0 || index >= int(views.size()))
+        return;
+    setFilterText(index == activeView() ? QString() : views[size_t(index)].query);
+    statusBar()->showMessage(index == activeView() ? tr("View: %1").arg(views[size_t(index)].name) : QString(), 3000);
+}
+
+void MainWindow::newView()
+{
+    ViewDialog dlg(tr("New view"), QString(), m_filter->text().simplified(),
+                   [this](const QString &q) { return countMatching(*m_store, q); },
+                   [this](const QString &name) { return m_viewList->indexOf(name) >= 0; }, m_tagIndex, this);
+    new TagCompleter(m_tagIndex, dlg.queryEdit());
+    if (dlg.exec() != QDialog::Accepted)
+        return;
+    m_viewList->add({dlg.name(), dlg.query()});
+    setFilterText(dlg.query()); // show it
+}
+
+void MainWindow::editView(int index)
+{
+    if (index < 0 || index >= int(m_viewList->views().size()))
+        return;
+    const CustomView old = m_viewList->views()[size_t(index)];
+    const bool wasActive = index == activeView();
+    ViewDialog dlg(tr("Edit view"), old.name, old.query,
+                   [this](const QString &q) { return countMatching(*m_store, q); },
+                   [this, index](const QString &name) {
+                       const int at = m_viewList->indexOf(name);
+                       return at >= 0 && at != index;
+                   },
+                   m_tagIndex, this);
+    new TagCompleter(m_tagIndex, dlg.queryEdit());
+    if (dlg.exec() != QDialog::Accepted)
+        return;
+    m_viewList->update(index, {dlg.name(), dlg.query()});
+    if (wasActive)
+        setFilterText(dlg.query()); // keep showing it, with the new filter
+}
+
+void MainWindow::deleteView(int index)
+{
+    if (index < 0 || index >= int(m_viewList->views().size()))
+        return;
+    const CustomView v = m_viewList->views()[size_t(index)];
+    if (QMessageBox::question(this, tr("Delete view"), tr("Delete the view \"%1\"?\n\nIts filter was: %2").arg(v.name, v.query),
+                              QMessageBox::Yes | QMessageBox::Cancel, QMessageBox::Cancel)
+        != QMessageBox::Yes)
+        return;
+    const bool wasActive = index == activeView();
+    m_viewList->remove(index);
+    if (wasActive)
+        setFilterText(QString());
+}
+
+void MainWindow::populateViewsMenu()
+{
+    const auto &views = m_viewList->views();
+    const int active = activeView();
+    m_viewsMenu->clear();
+    m_viewsMenu->addAction(m_newView);
+    m_editView->setEnabled(active >= 0);
+    m_deleteView->setEnabled(active >= 0);
+    m_editView->setText(active >= 0 ? tr("&Edit view \"%1\"…").arg(views[size_t(active)].name) : tr("&Edit view…"));
+    m_deleteView->setText(active >= 0 ? tr("&Delete view \"%1\"…").arg(views[size_t(active)].name) : tr("&Delete view…"));
+    m_viewsMenu->addActions({m_editView, m_deleteView});
+    m_viewsMenu->addSeparator();
+    if (views.empty())
+        m_viewsMenu->addAction(tr("No views yet: filter, then New view… (Ctrl+S)"))->setEnabled(false);
+    for (size_t i = 0; i < views.size(); ++i) {
+        QString label = views[i].name;
+        label.replace(u'&', QLatin1String("&&"));
+        QAction *a = i < m_viewShortcuts.size() ? m_viewShortcuts[i] : nullptr;
+        if (a) {
+            a->setText(label);
+        } else {
+            a = m_viewsMenu->addAction(label, this, [this, i] { applyView(int(i)); });
+            a->setCheckable(true);
+        }
+        a->setChecked(int(i) == active);
+        a->setToolTip(views[i].query);
+        m_viewsMenu->addAction(a);
+    }
+}
+
+void MainWindow::fitViewBar()
+{
+    // Whatever the tabs leave free on the row: from the end of the last tab to the edge.
+    const QTabBar *bar = m_tabs->tabBar();
+    const int tabsEnd = bar->mapTo(m_tabs, bar->tabRect(bar->count() - 1).topRight()).x();
+    const int free = m_tabs->width() - tabsEnd - 16;
+    m_viewBar->fit(std::max(free, 120));
+}
+
+bool MainWindow::eventFilter(QObject *watched, QEvent *event)
+{
+    if (watched == m_tabs && event->type() == QEvent::Resize)
+        fitViewBar();
+    return QMainWindow::eventFilter(watched, event);
+}
+
+void MainWindow::showFilterBuilder()
+{
+    if (!m_builderPopup) {
+        m_builderPopup = new QFrame(this, Qt::Popup);
+        m_builderPopup->setObjectName(QStringLiteral("filterBuilder"));
+        m_builderPopup->setFrameShape(QFrame::StyledPanel);
+        m_builderPopup->setAutoFillBackground(true);
+        auto *layout = new QVBoxLayout(m_builderPopup);
+        layout->setContentsMargins(14, 12, 14, 10);
+        auto *hint = new QLabel(tr("Click to filter; the box above shows the query being built."), m_builderPopup);
+        hint->setEnabled(false);
+        layout->addWidget(hint);
+        m_builder = new QueryBuilder(m_tagIndex, m_builderPopup);
+        layout->addWidget(m_builder);
+        connect(m_builder, &QueryBuilder::queryChanged, this, &MainWindow::setFilterText);
+    }
+    m_builder->setQuery(m_filter->text());
+    const int width = std::max(m_filter->width() + m_chooseButton->width(), 560);
+    m_builderPopup->setFixedWidth(width);
+    m_builderPopup->layout()->activate();
+    m_builderPopup->setFixedHeight(m_builderPopup->layout()->totalHeightForWidth(width));
+    QPoint at = m_filter->mapToGlobal(QPoint(0, m_filter->height() + 4));
+    if (const QScreen *screen = m_filter->screen()) { // keep it on screen
+        const QRect avail = screen->availableGeometry();
+        at.setX(std::clamp(at.x(), avail.left(), std::max(avail.left(), avail.right() - width)));
+    }
+    m_builderPopup->move(at);
+    m_builderPopup->show();
+}
+
+void MainWindow::showViewMenu(int index, const QPoint &globalPos)
+{
+    const int n = int(m_viewList->views().size());
+    if (index < 0 || index >= n)
+        return;
+    QMenu menu(this);
+    menu.addAction(tr("&Edit view…"), this, [this, index] { editView(index); });
+    menu.addAction(tr("Move &up"), this, [this, index] { m_viewList->move(index, index - 1); })->setEnabled(index > 0);
+    menu.addAction(tr("Move &down"), this, [this, index] { m_viewList->move(index, index + 1); })->setEnabled(index < n - 1);
+    menu.addSeparator();
+    menu.addAction(tr("&Delete view…"), this, [this, index] { deleteView(index); });
+    menu.exec(globalPos);
+}
+
 void MainWindow::applyFilter()
 {
     const SavedView list = saveView(m_list), agenda = saveView(m_agenda);
     m_listModel->refilter();
     m_agendaModel->refilter();
     m_sidebar->setActiveFilter(m_filter->text());
+    if (m_viewBar)
+        m_viewBar->setActive(activeView());
     restoreView(m_list, list, true);
     restoreView(m_agenda, agenda, true);
 }

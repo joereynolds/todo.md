@@ -1,4 +1,5 @@
 #include "dialogs.h"
+#include "querybuilder.h"
 
 #include <QButtonGroup>
 #include <QCalendarWidget>
@@ -254,4 +255,87 @@ void EtaDialog::set(int amount, QChar unit)
 QString EtaDialog::value() const
 {
     return QString::number(m_amount->value()) + m_unit->currentData().toChar();
+}
+
+ViewDialog::ViewDialog(const QString &title, const QString &name, const QString &query,
+                       std::function<int(const QString &)> countFor, std::function<bool(const QString &)> nameTaken,
+                       TagIndex *tags, QWidget *parent)
+    : QDialog(parent), m_countFor(std::move(countFor)), m_nameTaken(std::move(nameTaken))
+{
+    setWindowTitle(title);
+    setMinimumWidth(560);
+    auto *layout = new QVBoxLayout(this);
+    auto *form = new QFormLayout;
+    m_name = new QLineEdit(name, this);
+    m_name->setPlaceholderText(tr("e.g. This week, Media"));
+    m_query = new QLineEdit(query, this);
+    m_query->setPlaceholderText(tr("e.g. due:overdue|due:week   or   #music|#video|#photography"));
+    form->addRow(tr("&Name:"), m_name);
+    form->addRow(tr("&Filter:"), m_query);
+    layout->addLayout(form);
+
+    if (tags) {
+        // Click to build the filter; the text above follows, and typing there updates the chips.
+        m_builder = new QueryBuilder(tags, this);
+        m_builder->setQuery(query);
+        layout->addWidget(m_builder);
+        connect(m_builder, &QueryBuilder::queryChanged, m_query, &QLineEdit::setText);
+        connect(m_query, &QLineEdit::textEdited, m_builder, &QueryBuilder::setQuery);
+    }
+
+    auto *help = new QLabel(tr("Or type terms yourself. Spaces mean <b>and</b>, <b>|</b> means <b>or</b>:<br>"
+                               "<code>#music|#video</code> &nbsp; <code>due:overdue|due:week</code> &nbsp; "
+                               "<code>~&lt;=15m</code> &nbsp; <code>is:doing</code> &nbsp; <code>done:week</code> &nbsp; "
+                               "plain words match the text or file path."),
+                            this);
+    help->setWordWrap(true);
+    help->setTextFormat(Qt::RichText);
+    help->setEnabled(false); // dim
+    layout->addWidget(help);
+
+    m_status = new QLabel(this);
+    m_status->setWordWrap(true);
+    layout->addWidget(m_status);
+    layout->addStretch();
+
+    auto *buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, this);
+    m_ok = buttons->button(QDialogButtonBox::Ok);
+    m_ok->setText(tr("&Save"));
+    connect(buttons, &QDialogButtonBox::accepted, this, &QDialog::accept);
+    connect(buttons, &QDialogButtonBox::rejected, this, &QDialog::reject);
+    layout->addWidget(buttons);
+
+    connect(m_name, &QLineEdit::textChanged, this, &ViewDialog::validate);
+    connect(m_query, &QLineEdit::textChanged, this, &ViewDialog::validate);
+    validate();
+    (name.isEmpty() ? m_name : m_query)->setFocus();
+}
+
+QString ViewDialog::name() const
+{
+    return m_name->text().simplified();
+}
+
+QString ViewDialog::query() const
+{
+    return m_query->text().simplified();
+}
+
+void ViewDialog::validate()
+{
+    QString problem;
+    if (name().isEmpty())
+        problem = tr("Give the view a name.");
+    else if (m_nameTaken && m_nameTaken(name()))
+        problem = tr("There is already a view called \"%1\".").arg(name());
+    else if (query().isEmpty())
+        problem = tr("Enter a filter.");
+    m_ok->setEnabled(problem.isEmpty());
+    if (!problem.isEmpty())
+        m_status->setText(problem);
+    else if (m_countFor)
+        m_status->setText(tr("%n task(s) match right now (done and cancelled only if the filter asks for them).", nullptr,
+                             m_countFor(query())));
+    else
+        m_status->clear();
 }
