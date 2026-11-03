@@ -91,6 +91,11 @@ models, window) → `todomd` (just `main.cpp`). The tests link the libraries.
   `Task::content`, which is what the free-text filter, inline editing and find/replace use.
   Tags are stripped only when they trail (no plain word after them): "Do it #office" shows
   "Do it", but "Call #mum about it" keeps `#mum` so the sentence still reads.
+- Links (`parser::extractLinks`, run at the end of `parseMeta` and only when the text contains
+  `](`, `://`, `www.` or `mailto:`): markdown `[label](url)` displays as `label`; bare
+  `http(s)://`, `file://`, `mailto:` and `www.` URLs stay as written (trailing `.,;:!?` and an
+  unbalanced `)` are cut; `www.` opens as `https://`). `Task::links` holds (start, length, url)
+  into `Task::text`. Copy as list writes markdown links back as `[label](url)`.
 - Nesting comes from indentation (tab = next multiple of 4). Any non-blank line pops
   every open task indented at or deeper than it, so a heading or paragraph ends nesting.
   Blank lines don't. `Task::depth` is 0 for top-level tasks.
@@ -229,6 +234,13 @@ day in the sidebar read "174 days overdue".
   to the selected tasks only, **not** their subtasks — the one exception to the
   bulk-includes-subtasks rule, since subtasks inherit tags for filtering. New tags are
   still typed by hand (inline edit / add dialog).
+- Links in task text are drawn underlined in `TaskColors::link` (the theme accent, else the
+  in-progress blue; the text colour when selected or done/cancelled). `TaskDelegate::linkRects`
+  is the shared paint/hit-test geometry (stops at the elision point). A plain left click opens
+  the link (`TaskView::linkActivated` → `QDesktopServices`) without touching the selection; the
+  second click of a double-click does nothing. Hand cursor over links and tag chips (mouse
+  tracking), URL as tooltip. Right-click on a link: Open link / Copy link address at the top of
+  the context menu; on a task with links elsewhere: Copy link address (a submenu when several).
 - Tags column (list and agenda, hidden in the sidebar): chips drawn by `TaskDelegate`
   (`tagRects` is the shared paint/hit-test geometry; overflow shows `+N`, the tooltip lists
   all). Clicking a chip sets the filter to `#tag`; clicking it again when the filter is

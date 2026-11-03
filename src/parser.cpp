@@ -2,6 +2,7 @@
 
 #include <QFile>
 #include <QHash>
+#include <QRegularExpression>
 
 #include <algorithm>
 #include <cstring>
@@ -126,6 +127,76 @@ QStringView tagOf(QStringView tok)
     return tok.mid(1, i - 1);
 }
 
+std::vector<TaskLink> extractLinks(QString *text)
+{
+    std::vector<TaskLink> links;
+    const QString &s = *text;
+    // Cheap test first: almost no task has a link.
+    if (!s.contains(u"](") && !s.contains(u"://") && !s.contains(u"www.", Qt::CaseInsensitive)
+        && !s.contains(u"mailto:", Qt::CaseInsensitive))
+        return links;
+
+    // Markdown links: [label](url) shows "label".
+    if (s.contains(u"](")) {
+        static const QRegularExpression md(QStringLiteral(R"(\[([^\[\]]+)\]\(<?([^()\s<>]+(?:\([^()\s]*\)[^()\s<>]*)*)>?\))"));
+        QString out;
+        qsizetype last = 0;
+        for (auto it = md.globalMatch(s); it.hasNext();) {
+            const QRegularExpressionMatch m = it.next();
+            out += QStringView(s).mid(last, m.capturedStart() - last);
+            const QString label = m.captured(1);
+            QString url = m.captured(2);
+            if (url.startsWith(QLatin1String("www."), Qt::CaseInsensitive))
+                url.prepend(QLatin1String("https://"));
+            links.push_back({int(out.size()), int(label.size()), url});
+            out += label;
+            last = m.capturedEnd();
+        }
+        if (!links.empty()) {
+            out += QStringView(s).mid(last);
+            *text = std::move(out);
+        }
+    }
+
+    // Bare URLs, outside the markdown labels.
+    static const QRegularExpression bare(QStringLiteral(R"((?:https?://|file://|mailto:|www\.)[^\s<>"'`]+)"),
+                                         QRegularExpression::CaseInsensitiveOption);
+    const size_t markdown = links.size();
+    for (auto it = bare.globalMatch(*text); it.hasNext();) {
+        const QRegularExpressionMatch m = it.next();
+        qsizetype start = m.capturedStart();
+        if (start > 0 && (*text)[start - 1].isLetterOrNumber())
+            continue; // "awww.example": not a link
+        const bool inLabel = std::any_of(links.cbegin(), links.cbegin() + qsizetype(markdown), [&](const TaskLink &l) {
+            return start < l.start + l.length && l.start < m.capturedEnd();
+        });
+        if (inLabel)
+            continue;
+        QString url = m.captured(0);
+        // Trailing punctuation ends the sentence, not the URL; ')' only if unbalanced.
+        while (!url.isEmpty()) {
+            const QChar c = url.back();
+            if (QStringView(u".,;:!?*_~").contains(c)) {
+                url.chop(1);
+            } else if (c == u')' && url.count(u'(') < url.count(u')')) {
+                url.chop(1);
+            } else {
+                break;
+            }
+        }
+        const qsizetype scheme = url.indexOf(u':');
+        if (url.size() <= (url.startsWith(QLatin1String("www."), Qt::CaseInsensitive) ? 4 : scheme + 3))
+            continue; // nothing after the scheme
+        TaskLink link{int(start), int(url.size()), url};
+        if (url.startsWith(QLatin1String("www."), Qt::CaseInsensitive))
+            link.url.prepend(QLatin1String("https://"));
+        links.push_back(std::move(link));
+    }
+    if (markdown && links.size() > markdown)
+        std::sort(links.begin(), links.end(), [](const TaskLink &a, const TaskLink &b) { return a.start < b.start; });
+    return links;
+}
+
 qint64 parseEta(QStringView t)
 {
     // 1-9 digits followed by a unit.
@@ -243,6 +314,7 @@ void parseMeta(Task &t)
             text += u' ';
         text += tok;
     }
+    t.links = extractLinks(&text);
     t.text = std::move(text);
 }
 

@@ -394,6 +394,7 @@ QTreeView *MainWindow::makeView(bool tree)
         if (Task *t = p.model->taskAt(index))
             toggleTask(t);
     });
+    connect(v, &TaskView::linkActivated, this, [](const QUrl &url) { QDesktopServices::openUrl(url); });
     connect(v, &TaskView::tagClicked, this, [this](const QString &tag) {
         // Show everything with the tag; clicking the same tag again clears it.
         const QString term = u'#' + tag;
@@ -1432,6 +1433,29 @@ void MainWindow::showContextMenu(const QPoint &pos)
 {
     QTreeView *v = current().view;
     QMenu menu(this);
+    // Links first: the one under the cursor, else those of the task under it.
+    auto copy = [this](const QString &url) {
+        QApplication::clipboard()->setText(url);
+        statusBar()->showMessage(tr("Copied %1").arg(url), 3000);
+    };
+    if (const QString url = static_cast<TaskView *>(v)->linkAt(pos); !url.isEmpty()) {
+        menu.addAction(tr("Open &link"), this, [url] { QDesktopServices::openUrl(QUrl(url, QUrl::TolerantMode)); });
+        menu.addAction(tr("Copy link add&ress"), this, [copy, url] { copy(url); });
+        menu.addSeparator();
+    } else if (const Task *t = current().model->taskAt(v->indexAt(pos)); t && !t->links.empty()) {
+        if (t->links.size() == 1) {
+            menu.addAction(tr("Copy link add&ress"), this, [copy, url = t->links.front().url] { copy(url); });
+        } else {
+            QMenu *sub = menu.addMenu(tr("Copy link add&ress"));
+            for (const TaskLink &l : t->links) {
+                const QString shown = t->text.mid(l.start, l.length);
+                QString label = shown == l.url ? l.url : QStringLiteral("%1 — %2").arg(shown, l.url);
+                label.replace(u'&', QLatin1String("&&"));
+                sub->addAction(label, this, [copy, url = l.url] { copy(url); });
+            }
+        }
+        menu.addSeparator();
+    }
     menu.addActions({m_toggle, m_todo, m_doing, m_done, m_cancel});
     menu.addSeparator();
     menu.addActions({m_due, m_clearDue, m_eta});

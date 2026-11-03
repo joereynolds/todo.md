@@ -29,6 +29,7 @@
 #include <QMessageBox>
 #include <QListWidget>
 #include <QMenu>
+#include <QUrl>
 #include <QSettings>
 #include <QSignalSpy>
 #include <QTemporaryDir>
@@ -595,6 +596,62 @@ private slots:
         QCOMPARE(filter->text(), QString("#work"));
         QTest::mouseClick(cloud, Qt::LeftButton, {}, cloud->chipRects(cloud->width())[1].center());
         QCOMPARE(filter->text(), QString());
+    }
+
+    // Last: rewrites t.md. A click on a link emits linkActivated and leaves the
+    // selection alone; the context menu copies the address.
+    void links()
+    {
+        QSignalSpy changed(m_store, &TaskStore::changed);
+        QFile f(file());
+        QVERIFY(f.open(QIODevice::WriteOnly | QIODevice::Truncate));
+        f.write("- [ ] Read [the spec](https://s.io/spec) now\n- [ ] see https://a.io and https://b.io\n");
+        f.close();
+        QVERIFY(changed.wait(5000));
+        auto *view = static_cast<TaskView *>(m_view);
+        const QModelIndex row1 = m_view->model()->index(1, 0);
+        QCOMPARE(row1.data().toString(), QString("Read the spec now"));
+        const auto rects = TaskDelegate::linkRects(m_view->visualRect(row1), row1, m_view->font(), true);
+        QCOMPARE(rects.size(), size_t(1));
+        QCOMPARE(view->linkAt(rects[0].rect.center()), QString("https://s.io/spec"));
+
+        select(2);
+        QSignalSpy opened(view, &TaskView::linkActivated);
+        QTest::mouseClick(m_view->viewport(), Qt::LeftButton, {}, rects[0].rect.center());
+        QCOMPARE(opened.size(), 1);
+        QCOMPARE(opened.at(0).at(0).toUrl(), QUrl("https://s.io/spec"));
+        QCOMPARE(m_view->currentIndex().row(), 2); // selection untouched
+        // Clicking the plain text still selects.
+        QTest::mouseClick(m_view->viewport(), Qt::LeftButton, {}, QPoint(rects[0].rect.left() - 20, rects[0].rect.center().y()));
+        QCOMPARE(m_view->currentIndex().row(), 1);
+        QCOMPARE(opened.size(), 1);
+
+        // Right-click on the link: "Copy link address" copies it.
+        QApplication::clipboard()->clear();
+        QTimer::singleShot(100, this, [] {
+            auto *menu = qobject_cast<QMenu *>(QApplication::activePopupWidget());
+            QVERIFY(menu);
+            QCOMPARE(menu->actions().at(0)->text(), QString("Open &link"));
+            menu->actions().at(1)->trigger();
+            menu->close();
+        });
+        emit m_view->customContextMenuRequested(rects[0].rect.center());
+        QCOMPARE(QApplication::clipboard()->text(), QString("https://s.io/spec"));
+
+        // Elsewhere on a task with two links: a submenu of both.
+        const QModelIndex row2 = m_view->model()->index(2, 0);
+        const QPoint plain = TaskDelegate::layoutFor(m_view->visualRect(row2), row2, true).text.topLeft() + QPoint(3, 8);
+        QTimer::singleShot(100, this, [] {
+            auto *menu = qobject_cast<QMenu *>(QApplication::activePopupWidget());
+            QVERIFY(menu);
+            QMenu *sub = menu->actions().at(0)->menu();
+            QVERIFY(sub);
+            QCOMPARE(sub->actions().size(), 2);
+            sub->actions().at(1)->trigger();
+            menu->close();
+        });
+        emit m_view->customContextMenuRequested(plain);
+        QCOMPARE(QApplication::clipboard()->text(), QString("https://b.io"));
     }
 };
 

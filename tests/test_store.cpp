@@ -253,10 +253,14 @@ private slots:
         QVERIFY(day.index(0, 0).data(TaskModelBase::HeaderRole).toBool());
 
         // Labels: relative only within 14 days; empty past days aren't "overdue".
+        // An empty store, so no fixture task can fall on the day being checked
+        // (the fixture's fixed dates made this fail on 2026-11-02 and 11-05).
+        TaskStore none;
+        AgendaModel empty(&none);
         const QDate today = QDate::currentDate();
         auto label = [&](int offset) {
-            day.setSingleDay(today.addDays(offset));
-            return day.index(0, 0).data().toString();
+            empty.setSingleDay(today.addDays(offset));
+            return empty.index(0, 0).data().toString();
         };
         QVERIFY(label(0).endsWith("today"));
         QVERIFY(label(-3).endsWith("3 days ago"));
@@ -407,6 +411,9 @@ private slots:
         // Indentation is relative to what's in the list.
         QCOMPARE(tasksAsBulletList({&t[0], &t[2]}), QString("- Plan trip\n  - Seats\n"));
         QCOMPARE(tasksAsBulletList({&t[2], &t[3]}), QString("- Seats\n- Other\n"));
+
+        auto links = parser::parse("/l.md", "l.md", "- [ ] Read [spec](https://s.io) at www.x.org and https://y.io !2026-01-01\n");
+        QCOMPARE(tasksAsBulletList({&links->tasks[0]}), QString("- Read [spec](https://s.io) at www.x.org and https://y.io\n"));
     }
 
     void appendCreatesFile()

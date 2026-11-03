@@ -17,6 +17,14 @@ struct Node {
     bool isFile;
 };
 
+// A hyperlink in Task::text: [start, start + length) is what's shown (the URL itself,
+// or the label of a markdown [label](url) link); url is what opens.
+struct TaskLink {
+    int start = 0;
+    int length = 0;
+    QString url;
+};
+
 struct Task : Node {
     Task() : Node(false) {}
 
@@ -39,6 +47,7 @@ struct Task : Node {
     qint64 eta = 0;  // estimate in minutes, 0 = none
     QString etaText; // as written, without the '~' (e.g. "90m")
     QStringList tags; // "#work" -> "work", as written, in order, no duplicates (case-insensitive)
+    std::vector<TaskLink> links; // in text, left to right
 
     int subDone = 0;  // completed descendants
     int subTotal = 0; // non-cancelled descendants

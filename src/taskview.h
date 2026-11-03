@@ -31,6 +31,15 @@ public:
     static std::vector<QRect> tagRects(const QRect &cell, const QStringList &tags, const QFont &font);
     static QFont smallFont(const QFont &font); // tag chips and the progress pill
 
+    // Visible links of a task cell (none past the elision point), with the part of
+    // the display text each covers: [start, end). Shared by paint and hit-testing.
+    struct LinkRect {
+        QRect rect;
+        QString url;
+        int start = 0, end = 0;
+    };
+    static std::vector<LinkRect> linkRects(const QRect &cell, const QModelIndex &index, const QFont &viewFont, bool tree);
+
     TaskDelegate(bool tree, QObject *parent = nullptr);
 
     void paint(QPainter *p, const QStyleOptionViewItem &option, const QModelIndex &index) const override;
@@ -65,14 +74,21 @@ public:
 signals:
     void checkClicked(const QModelIndex &index);
     void tagClicked(const QString &tag); // without '#'
+    void linkActivated(const QUrl &url);  // a click on a link in a task's text
+
+public:
+    QString linkAt(const QPoint &viewportPos) const; // URL of the link under the point, or empty
 
 protected:
     void mousePressEvent(QMouseEvent *event) override;
     void mouseDoubleClickEvent(QMouseEvent *event) override;
     void keyPressEvent(QKeyEvent *event) override;
+    void mouseMoveEvent(QMouseEvent *event) override;
+    bool viewportEvent(QEvent *event) override;
 
 private:
-    enum class Hit { None, Arrow, Check, Tag };
+    enum class Hit { None, Arrow, Check, Tag, Link };
+    // tag receives the tag (Hit::Tag) or the URL (Hit::Link).
     Hit hitTest(const QPoint &pos, QModelIndex *index, QString *tag = nullptr) const;
     bool handleHit(const QPoint &pos);
     FlatTaskModel *listModel() const;

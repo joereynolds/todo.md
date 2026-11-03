@@ -25,8 +25,14 @@ qint64 parseEta(QStringView text);
 // that (punctuation) is ignored.
 QStringView tagOf(QStringView token);
 
-// Fills text, dates, ETA and tags from task.content.
+// Fills text, dates, ETA, tags and links from task.content.
 void parseMeta(Task &task);
+
+// Finds hyperlinks in display text: markdown [label](url) links are replaced by
+// their label, and bare http(s)://, file://, mailto: and www. URLs are kept as
+// they are (trailing punctuation and an unbalanced ')' are not part of them).
+// "www.x" opens as "https://www.x". Returns the links; rewrites *text.
+std::vector<TaskLink> extractLinks(QString *text);
 
 std::unique_ptr<TaskFile> parse(const QString &path, const QString &relPath, const QByteArray &data);
 // Returns nullptr if the file cannot be read.

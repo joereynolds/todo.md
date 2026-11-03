@@ -82,13 +82,14 @@ private:
 
 // Tasks as a plain bulleted list for sharing: "- text" per task (display text, so
 // dates, ETAs and trailing tags are left out), each indented two spaces per
-// ancestor that is also in the list. `tasks` is in display order.
+// ancestor that is also in the list. `tasks` is in display order. Markdown links
+// are written back as [label](url).
 QString tasksAsBulletList(const std::vector<Task *> &tasks);
 
 // Colours that depend on the palette (and so on the theme).
 struct TaskColors {
     bool dark = false;
-    QColor dim, doing, overdue, today, quick, done, band, guide, checkBorder, pill, pillText;
+    QColor dim, doing, overdue, today, quick, done, band, guide, checkBorder, pill, pillText, link;
     static TaskColors fromPalette(const QPalette &pal);
 };
 
@@ -106,6 +107,7 @@ public:
         HasChildrenRole,              // bool; row can be expanded/collapsed
         ExpandedRole,                 // bool
         TagsRole,                     // QStringList (without '#'), on tag cells of task rows
+        LinksRole,                    // QVariantList {start, length, url, ...} into DisplayRole; task cells with links
     };
 
     explicit TaskModelBase(TaskStore *store, QObject *parent = nullptr);

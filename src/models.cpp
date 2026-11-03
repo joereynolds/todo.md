@@ -258,7 +258,14 @@ QString tasksAsBulletList(const std::vector<Task *> &tasks)
         int level = 0;
         for (const Task *a = t->parent; a; a = a->parent)
             level += in.contains(a) ? 1 : 0;
-        out += QString(level * 2, u' ') + QStringLiteral("- ") + (t->text.isEmpty() ? t->content : t->text) + u'\n';
+        QString text = t->text.isEmpty() ? t->content : t->text;
+        // Markdown links were shown as their label; put the URL back.
+        for (auto l = t->links.crbegin(); l != t->links.crend(); ++l) {
+            const QString label = text.mid(l->start, l->length);
+            if (label != l->url && QLatin1String("https://") + label != l->url) // not a bare URL
+                text.replace(l->start, l->length, QStringLiteral("[%1](%2)").arg(label, l->url));
+        }
+        out += QString(level * 2, u' ') + QStringLiteral("- ") + text + u'\n';
     }
     return out;
 }
@@ -291,8 +298,9 @@ TaskColors TaskColors::fromPalette(const QPalette &pal)
     c.dark = pal.color(QPalette::Window).lightness() < 128;
     c.dim = pal.color(QPalette::Disabled, QPalette::Text);
     c.doing = c.dark ? QColor(0x6c, 0xaa, 0xf0) : QColor(0x1f, 0x6f, 0xd0);
+    c.link = c.doing;
     if (const QColor a = theme::accent(); a.isValid())
-        c.doing = a;
+        c.doing = c.link = a;
     c.overdue = c.dark ? QColor(0xf0, 0x70, 0x70) : QColor(0xc8, 0x2a, 0x2a);
     c.today = c.dark ? QColor(0xe8, 0xa8, 0x40) : QColor(0xb0, 0x6a, 0x00);
     c.quick = c.dark ? QColor(0x7c, 0xc8, 0x7c) : QColor(0x24, 0x80, 0x3a);
@@ -346,6 +354,15 @@ QVariant TaskModelBase::taskData(const Task *t, int role) const
         return t->subTotal > 0 ? QVariant(QPoint(t->subDone, t->subTotal)) : QVariant();
     case Qt::EditRole:
         return t->content;
+    case LinksRole: {
+        if (t->links.empty())
+            return {};
+        QVariantList out;
+        out.reserve(qsizetype(t->links.size()) * 3);
+        for (const TaskLink &l : t->links)
+            out << l.start << l.length << l.url;
+        return out;
+    }
     case Qt::ForegroundRole:
         if (t->state == TaskState::Done || t->state == TaskState::Cancelled)
             return m_colors.dim;

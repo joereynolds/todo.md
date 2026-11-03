@@ -11,6 +11,7 @@
 #include <QHeaderView>
 #include <QLabel>
 #include <QLineEdit>
+#include <QDesktopServices>
 #include <QPainter>
 #include <QToolButton>
 #include <QScrollBar>
@@ -416,6 +417,7 @@ Sidebar::Sidebar(TaskStore *store, TagIndex *tags, QWidget *parent) : QWidget(pa
 
     connect(m_calendar, &QCalendarWidget::selectionChanged, this, [this] { showDay(m_calendar->selectedDate()); });
     connect(todayButton, &QPushButton::clicked, this, [this] { showDay(QDate::currentDate()); });
+    connect(m_dayView, &TaskView::linkActivated, this, [](const QUrl &url) { QDesktopServices::openUrl(url); });
     connect(m_dayView, &TaskView::checkClicked, this, [this](const QModelIndex &index) {
         if (Task *t = m_dayModel->taskAt(index))
             emit toggleRequested(t);

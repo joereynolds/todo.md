@@ -4,7 +4,10 @@
 #include "theme.h"
 
 #include <QApplication>
+#include <QHelpEvent>
 #include <QKeyEvent>
+#include <QToolTip>
+#include <QUrl>
 #include <QLineEdit>
 #include <QMouseEvent>
 #include <QPainter>
@@ -13,6 +16,35 @@
 namespace {
 
 constexpr int kPad = 4;
+
+// The font a cell is drawn with: the view's, plus the model's (bold for in progress, …).
+QFont cellFont(const QModelIndex &index, const QFont &base)
+{
+    const QVariant v = index.data(Qt::FontRole);
+    return v.isValid() ? qvariant_cast<QFont>(v).resolve(base) : base;
+}
+
+// Width of the "done/total" pill after the text, 0 when there is none.
+int pillWidth(const QModelIndex &index, const QFont &base)
+{
+    const QVariant progress = index.data(TaskModelBase::ProgressRole);
+    if (!progress.isValid() || progress.toPoint().y() <= 0)
+        return 0;
+    QFont f = TaskDelegate::smallFont(base);
+    f.setBold(true);
+    const QPoint p = progress.toPoint();
+    return QFontMetrics(f).horizontalAdvance(QStringLiteral("%1/%2").arg(p.x()).arg(p.y())) + 14;
+}
+
+// Length of the common prefix: how much of the full text survives elision.
+int keptLength(const QString &full, const QString &elided)
+{
+    int n = 0;
+    const int max = int(std::min(full.size(), elided.size()));
+    while (n < max && full[n] == elided[n])
+        ++n;
+    return n;
+}
 
 void drawChevron(QPainter *p, const QRect &slot, bool open, const QColor &color)
 {
@@ -111,6 +143,36 @@ QFont TaskDelegate::smallFont(const QFont &font)
     f.setStrikeOut(false);
     f.setItalic(false);
     return f;
+}
+
+std::vector<TaskDelegate::LinkRect> TaskDelegate::linkRects(const QRect &cell, const QModelIndex &index,
+                                                            const QFont &viewFont, bool tree)
+{
+    std::vector<LinkRect> out;
+    if (index.column() != 0)
+        return out;
+    const QVariant v = index.data(TaskModelBase::LinksRole);
+    if (!v.isValid())
+        return out;
+    const QVariantList links = v.toList();
+    const Layout l = layoutFor(cell, index, tree);
+    const QFont font = cellFont(index, viewFont);
+    const QFontMetrics fm(font);
+    const QString full = index.data(Qt::DisplayRole).toString();
+    const int pw = pillWidth(index, viewFont);
+    const QString elided = fm.elidedText(full, Qt::ElideRight, std::max(0, l.text.width() - (pw ? pw + 8 : 0)));
+    const int keep = keptLength(full, elided);
+    const int top = l.text.top() + (l.text.height() - fm.height()) / 2;
+    for (qsizetype i = 0; i + 2 < links.size(); i += 3) {
+        const int start = links[i].toInt();
+        const int end = std::min(start + links[i + 1].toInt(), keep);
+        if (end <= start)
+            continue;
+        const int x0 = l.text.left() + fm.horizontalAdvance(full.left(start));
+        const int x1 = l.text.left() + fm.horizontalAdvance(full.left(end));
+        out.push_back({QRect(x0, top, x1 - x0, fm.height()), links[i + 2].toString(), start, end});
+    }
+    return out;
 }
 
 std::vector<QRect> TaskDelegate::tagRects(const QRect &cell, const QStringList &tags, const QFont &font)
@@ -226,8 +288,36 @@ void TaskDelegate::paint(QPainter *p, const QStyleOptionViewItem &option, const 
     const QRect textRect = l.text;
     const QString text = fm.elidedText(opt.text, Qt::ElideRight, std::max(0, textRect.width() - (pillW ? pillW + 8 : 0)));
     p->setFont(opt.font);
-    p->setPen(selected ? opt.palette.color(QPalette::HighlightedText) : opt.palette.color(QPalette::Text));
-    p->drawText(textRect, Qt::AlignVCenter | Qt::AlignLeft | Qt::TextSingleLine, text);
+    const QColor ink = selected ? opt.palette.color(QPalette::HighlightedText) : opt.palette.color(QPalette::Text);
+    p->setPen(ink);
+    const std::vector<LinkRect> links = linkRects(option.rect, index, option.font, m_tree);
+    if (links.empty()) {
+        p->drawText(textRect, Qt::AlignVCenter | Qt::AlignLeft | Qt::TextSingleLine, text);
+    } else {
+        // Plain runs in the text colour, links underlined in the link colour (or the
+        // text colour when selected or done/cancelled), then whatever follows, ellipsis included.
+        const TaskState st = TaskState(state.toInt());
+        const bool closed = st == TaskState::Done || st == TaskState::Cancelled;
+        const QColor linkInk = selected || closed ? ink : colors.link;
+        QFont linkFont = opt.font;
+        linkFont.setUnderline(true);
+        auto run = [&](int from, const QString &piece, const QFont &f, const QColor &c) {
+            if (piece.isEmpty())
+                return;
+            QRect r = textRect;
+            r.setLeft(textRect.left() + fm.horizontalAdvance(opt.text.left(from)));
+            p->setFont(f);
+            p->setPen(c);
+            p->drawText(r, Qt::AlignVCenter | Qt::AlignLeft | Qt::TextSingleLine, piece);
+        };
+        int pos = 0;
+        for (const LinkRect &lr : links) {
+            run(pos, opt.text.mid(pos, lr.start - pos), opt.font, ink);
+            run(lr.start, opt.text.mid(lr.start, lr.end - lr.start), linkFont, linkInk);
+            pos = lr.end;
+        }
+        run(pos, text.mid(pos), opt.font, ink); // text is the elided string; same prefix as opt.text
+    }
 
     if (pillW) {
         const int h = pfm.height() + 3;
@@ -290,6 +380,7 @@ void TaskDelegate::updateEditorGeometry(QWidget *editor, const QStyleOptionViewI
 TaskView::TaskView(bool tree, QWidget *parent) : QTreeView(parent), m_tree(tree)
 {
     setItemDelegate(new TaskDelegate(tree, this));
+    setMouseTracking(true); // hand cursor over links and tag chips
 }
 
 void TaskView::setSpanHeaders(bool on)
@@ -344,6 +435,13 @@ TaskView::Hit TaskView::hitTest(const QPoint &pos, QModelIndex *out, QString *ta
         return Hit::None;
     const TaskDelegate::Layout l = TaskDelegate::layoutFor(visualRect(index), index, m_tree);
     *out = index;
+    for (const TaskDelegate::LinkRect &lr : TaskDelegate::linkRects(visualRect(index), index, font(), m_tree)) {
+        if (lr.rect.contains(pos)) {
+            if (tag)
+                *tag = lr.url;
+            return Hit::Link;
+        }
+    }
     if (m_tree && l.arrow.contains(pos) && index.data(TaskModelBase::HasChildrenRole).toBool())
         return Hit::Arrow;
     if (!l.check.isEmpty() && l.check.adjusted(-3, -3, 3, 3).contains(pos))
@@ -358,6 +456,9 @@ bool TaskView::handleHit(const QPoint &pos)
     switch (hitTest(pos, &index, &tag)) {
     case Hit::Tag:
         emit tagClicked(tag);
+        return true;
+    case Hit::Link:
+        emit linkActivated(QUrl(tag, QUrl::TolerantMode));
         return true;
     case Hit::Arrow:
         if (FlatTaskModel *m = listModel())
@@ -384,7 +485,13 @@ void TaskView::mousePressEvent(QMouseEvent *event)
 void TaskView::mouseDoubleClickEvent(QMouseEvent *event)
 {
     if (event->button() == Qt::LeftButton) {
-        // A quick second click on a chevron/checkbox is just another click.
+        // A quick second click on a chevron/checkbox is just another click; on a
+        // link it does nothing (the first click already opened it).
+        QModelIndex hit;
+        if (hitTest(event->pos(), &hit) == Hit::Link) {
+            event->accept();
+            return;
+        }
         if (handleHit(event->pos())) {
             event->accept();
             return;
@@ -397,6 +504,38 @@ void TaskView::mouseDoubleClickEvent(QMouseEvent *event)
         }
     }
     QTreeView::mouseDoubleClickEvent(event);
+}
+
+QString TaskView::linkAt(const QPoint &pos) const
+{
+    QModelIndex index;
+    QString url;
+    return hitTest(pos, &index, &url) == Hit::Link ? url : QString();
+}
+
+void TaskView::mouseMoveEvent(QMouseEvent *event)
+{
+    if (event->buttons() == Qt::NoButton) {
+        QModelIndex index;
+        const Hit h = hitTest(event->pos(), &index);
+        if (h == Hit::Link || h == Hit::Tag)
+            viewport()->setCursor(Qt::PointingHandCursor);
+        else
+            viewport()->unsetCursor();
+    }
+    QTreeView::mouseMoveEvent(event);
+}
+
+bool TaskView::viewportEvent(QEvent *event)
+{
+    if (event->type() == QEvent::ToolTip) {
+        const auto *help = static_cast<QHelpEvent *>(event);
+        if (const QString url = linkAt(help->pos()); !url.isEmpty()) {
+            QToolTip::showText(help->globalPos(), url, viewport());
+            return true;
+        }
+    }
+    return QTreeView::viewportEvent(event);
 }
 
 void TaskView::selectRow(int row)

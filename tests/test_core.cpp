@@ -169,6 +169,37 @@ private slots:
         QCOMPARE(parser::setEta("- [ ] ~2m a", ""), QString("- [ ] a"));
     }
 
+    void links()
+    {
+        auto check = [](QString text, const QString &shown, const std::vector<std::pair<QString, QString>> &expect) {
+            const auto links = parser::extractLinks(&text);
+            QCOMPARE(text, shown);
+            QCOMPARE(links.size(), expect.size());
+            for (size_t i = 0; i < links.size(); ++i) {
+                QCOMPARE(text.mid(links[i].start, links[i].length), expect[i].first);
+                QCOMPARE(links[i].url, expect[i].second);
+            }
+        };
+        check("no links here", "no links here", {});
+        check("See https://example.com/a?b=1#c.", "See https://example.com/a?b=1#c.",
+              {{"https://example.com/a?b=1#c", "https://example.com/a?b=1#c"}});
+        check("(docs at http://x.org/wiki/Foo_(bar))", "(docs at http://x.org/wiki/Foo_(bar))",
+              {{"http://x.org/wiki/Foo_(bar)", "http://x.org/wiki/Foo_(bar)"}});
+        check("go to www.site.com, then", "go to www.site.com, then", {{"www.site.com", "https://www.site.com"}});
+        check("awww.nope and https:// alone", "awww.nope and https:// alone", {});
+        check("Read [the spec](https://s.io/spec) and https://b.io", "Read the spec and https://b.io",
+              {{"the spec", "https://s.io/spec"}, {"https://b.io", "https://b.io"}});
+        check("[a](https://a.io) [b](<https://b.io/x y>)", "a [b](<https://b.io/x y>)",
+              {{"a", "https://a.io"}, {"https://b.io/x", "https://b.io/x"}}); // a space ends a bare URL
+        check("mail mailto:me@x.org", "mail mailto:me@x.org", {{"mailto:me@x.org", "mailto:me@x.org"}});
+
+        // Through the parser: dates are stripped first, positions refer to Task::text.
+        auto f = parser::parse("/a.md", "a.md", "- [ ] Check [PR](https://gh.com/1) !2026-01-02 https://ci.io #work\n");
+        QCOMPARE(f->tasks[0].text, QString("Check PR https://ci.io"));
+        QCOMPARE(f->tasks[0].links.size(), size_t(2));
+        QCOMPARE(f->tasks[0].links[1].start, 9);
+    }
+
     void addTag()
     {
         QCOMPARE(parser::addTag("- [ ] a", "work"), QString("- [ ] a #work"));
