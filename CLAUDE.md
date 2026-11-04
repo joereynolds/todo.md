@@ -162,8 +162,12 @@ round 4 asked for the same in the agenda. Both views now share `FlatTaskModel`:
   per day (roots = open tasks due that day, minus any whose ancestor is already a root
   that day). Headers come from `groupData`, task cells from `taskRowData`.
 - Rows are a header (`depth 0`) followed by a depth-first walk of the roots and all
-  subtasks. A task is visible if it matches the filter or has a visible descendant,
-  so ancestors of matches stay as context. When the filter shows everything, a fast
+  subtasks. A task is visible if it matches the filter, has a visible descendant
+  (ancestors of matches stay as context), or sits under a task that matches and its
+  state is shown (a match brings its subtasks: `appendTask`'s `under`). The mobile app
+  also treats a view as holding for the subtasks of a task it matches (`inView`), so a
+  `#house` view lists untagged subtasks of a `#house` task; port that with views. When
+  the filter shows everything, a fast
   path skips the matching.
 - A node's descendants are always a contiguous run of rows below it, so collapse is
   one `beginRemoveRows`, and expand regenerates that group's rows and inserts the run.

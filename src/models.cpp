@@ -568,8 +568,10 @@ void FlatTaskModel::appendGroupRows(int g, std::vector<Row> &out) const
 
 // Appends t and its visible descendants (unless `hidden`, i.e. under a
 // collapsed node, in which case only visibility is computed). Returns whether
-// t is visible: it matches or has a visible descendant.
-bool FlatTaskModel::appendTask(Task *t, int g, int depth, bool hidden, std::vector<Row> &out) const
+// t is visible: it matches, sits under a task that matches (`under`; its state
+// must still be shown), or has a visible descendant. So a match brings its
+// subtasks along even when they don't match themselves.
+bool FlatTaskModel::appendTask(Task *t, int g, int depth, bool hidden, std::vector<Row> &out, bool under) const
 {
     if (m_all) {
         if (hidden)
@@ -587,10 +589,11 @@ bool FlatTaskModel::appendTask(Task *t, int g, int depth, bool hidden, std::vect
     if (!hidden)
         out.push_back({t, g, depth, false, true});
     const bool open = t->children.empty() || !isCollapsed(taskKey(t));
+    const bool shown = (under && m_filter.stateVisible(t->state)) || m_filter.matches(*t);
     bool anyChild = false;
     for (Task *c : t->children)
-        anyChild |= appendTask(c, g, depth + 1, hidden || !open, out);
-    if (!anyChild && !m_filter.matches(*t)) {
+        anyChild |= appendTask(c, g, depth + 1, hidden || !open, out, shown);
+    if (!anyChild && !shown) {
         if (!hidden)
             out.resize(mark);
         return false;

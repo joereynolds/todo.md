@@ -139,9 +139,10 @@ private slots:
         m_list->filter().setText("sub/");
         m_list->refilter();
         QCOMPARE(m_list->rowCount(), 2);
+        // A match brings its subtasks (state permitting: one.a is done, hidden).
         m_list->filter().setText("!2026-11");
         m_list->refilter();
-        QCOMPARE(m_list->rowCount(), 2);
+        QCOMPARE(listRows(), QStringList({"a.md  (1/4)", "  [ ] one  (1/2)", "    [ ] one.b"}));
         m_list->filter().setText("");
         m_list->filter().setStateVisible(TaskState::Done, true);
         m_list->refilter();
@@ -211,14 +212,14 @@ private slots:
         QCOMPARE(texts(), QStringList({"two"}));
         m_list->filter().setText("~>=1h ~<1d");
         m_list->refilter();
-        QCOMPARE(texts(), QStringList({"one"}));
+        QCOMPARE(texts(), QStringList({"one", "one.a", "one.b"})); // subtasks come with a match
         m_list->filter().setText("~none");
         m_list->refilter();
         QCOMPARE(texts(), QStringList({"one", "one.a", "bee"}));
         m_list->filter().setText("");
         m_list->filter().setEtaPreset({{C::Any, 0}});
         m_list->refilter();
-        QCOMPARE(texts(), QStringList({"one", "one.b", "two"}));
+        QCOMPARE(texts(), QStringList({"one", "one.a", "one.b", "two"})); // one.a: under a match
         m_list->filter().setEtaPreset({});
         m_list->refilter();
         QCOMPARE(m_list->rowCount(), 7);

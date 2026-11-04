@@ -213,7 +213,7 @@ protected:
 private:
     void rebuild();
     void appendGroupRows(int g, std::vector<Row> &out) const;
-    bool appendTask(Task *t, int g, int depth, bool hidden, std::vector<Row> &out) const;
+    bool appendTask(Task *t, int g, int depth, bool hidden, std::vector<Row> &out, bool under = false) const;
     bool isCollapsed(const QString &key) const;
     QSet<QString> &collapsed() { return m_filter.narrows() ? m_tempCollapsed : m_collapsed; }
     const QSet<QString> &collapsed() const { return m_filter.narrows() ? m_tempCollapsed : m_collapsed; }
