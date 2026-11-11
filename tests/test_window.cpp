@@ -168,6 +168,42 @@ private slots:
         QCOMPARE(contents(), QByteArray("- [ ] a\n- [ ] b\n  - [ ] b1\n- [ ] c\n"));
     }
 
+    void doneTasksStayUntilFilterChanges()
+    {
+        // Done is hidden by default, but a task just ticked off stays, checked.
+        QTest::mouseClick(m_view->viewport(), Qt::LeftButton, {}, hotspot(2, true));
+        QCOMPARE(m_view->model()->rowCount(), 5);
+        QCOMPARE(m_view->model()->index(2, 0).data(TaskModelBase::StateRole).toInt(), int(TaskState::Done));
+        QCOMPARE(m_view->model()->index(3, 0).data(TaskModelBase::StateRole).toInt(), int(TaskState::Done));
+        select(1);
+        key(Qt::Key_X);
+        QCOMPARE(m_view->model()->rowCount(), 5);
+
+        // Unticking it makes it todo again, still in place.
+        QTest::mouseClick(m_view->viewport(), Qt::LeftButton, {}, hotspot(2, true));
+        QCOMPARE(contents(), QStringLiteral("- [x] a x%1\n- [ ] b\n  - [ ] b1\n- [ ] c\n")
+                                 .arg(QDate::currentDate().toString(Qt::ISODate))
+                                 .toUtf8());
+        QCOMPARE(m_view->model()->rowCount(), 5);
+
+        // A filter change lets the done ones go.
+        QLineEdit *filter = nullptr;
+        for (QLineEdit *e : m_window->findChildren<QLineEdit *>()) {
+            if (e->placeholderText().contains("Filter"))
+                filter = e;
+        }
+        QVERIFY(filter);
+        filter->setText("x");
+        filter->setText("");
+        QTRY_COMPARE(m_view->model()->rowCount(), 4);
+
+        key(Qt::Key_Z, Qt::ControlModifier);
+        key(Qt::Key_Z, Qt::ControlModifier);
+        key(Qt::Key_Z, Qt::ControlModifier);
+        QCOMPARE(contents(), QByteArray("- [ ] a\n- [ ] b\n  - [ ] b1\n- [ ] c\n"));
+        QTRY_COMPARE(m_view->model()->rowCount(), 5);
+    }
+
     void setEta()
     {
         select(1);

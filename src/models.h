@@ -162,7 +162,13 @@ public:
 
     TaskFilter &filter() { return m_filter; }
     const TaskFilter &filter() const { return m_filter; }
-    void refilter(); // call after changing filter()
+    void refilter(); // call after changing filter(); also forgets kept tasks
+
+    // Keeps these tasks shown whatever their state, so a task just ticked off
+    // stays in the list (checked) instead of vanishing. Kept by file path +
+    // text, so they survive the store change; cleared by refilter().
+    void keepVisible(const std::vector<const Task *> &tasks);
+    bool isKept(const Task *t) const { return !m_kept.isEmpty() && m_kept.contains(taskKey(t)); }
 
     void setExpanded(int row, bool expanded);
     void expandAll();
@@ -224,6 +230,7 @@ private:
     bool m_resetting = false;
     QSet<QString> m_collapsed;     // group keys and file path + '\x1f' + task text
     QSet<QString> m_tempCollapsed; // while the filter narrows
+    QSet<QString> m_kept;          // taskKey()s shown regardless of the filter (keepVisible)
 };
 
 // Every file with tasks. Task::listRow is this model's row lookup.

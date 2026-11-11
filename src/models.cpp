@@ -526,7 +526,14 @@ void FlatTaskModel::reset()
 void FlatTaskModel::refilter()
 {
     m_tempCollapsed.clear();
+    m_kept.clear();
     reset();
+}
+
+void FlatTaskModel::keepVisible(const std::vector<const Task *> &tasks)
+{
+    for (const Task *t : tasks)
+        m_kept.insert(taskKey(t));
 }
 
 void FlatTaskModel::rebuild()
@@ -589,7 +596,7 @@ bool FlatTaskModel::appendTask(Task *t, int g, int depth, bool hidden, std::vect
     if (!hidden)
         out.push_back({t, g, depth, false, true});
     const bool open = t->children.empty() || !isCollapsed(taskKey(t));
-    const bool shown = (under && m_filter.stateVisible(t->state)) || m_filter.matches(*t);
+    const bool shown = (under && m_filter.stateVisible(t->state)) || m_filter.matches(*t) || isKept(t);
     bool anyChild = false;
     for (Task *c : t->children)
         anyChild |= appendTask(c, g, depth + 1, hidden || !open, out, shown);
@@ -885,7 +892,7 @@ void AgendaModel::collectGroups(std::vector<Group> &out) const
     std::vector<Task *> due;
     for (const auto &f : m_store->files()) {
         for (Task &t : f->tasks) {
-            if (t.due.isValid() && t.isOpen() && (!m_day.isValid() || t.due == m_day))
+            if (t.due.isValid() && (t.isOpen() || isKept(&t)) && (!m_day.isValid() || t.due == m_day))
                 due.push_back(&t);
         }
     }

@@ -1260,13 +1260,34 @@ void MainWindow::setState(TaskState state)
     static const char *labels[] = {"Mark todo", "Mark in progress", "Mark done", "Mark cancelled"};
     const QDate today = QDate::currentDate();
     std::vector<Edit> edits;
+    std::vector<const Task *> changed;
     for (const Task *t : selectedTasks(true)) {
         if (t->state == state)
             continue;
         const QString raw = t->raw();
         edits.push_back({t->file->path, t->line, {raw}, {parser::setState(raw, state, today)}});
+        changed.push_back(t);
     }
+    keepVisible(changed);
     runEdits(edits, tr(labels[int(state)]));
+}
+
+// A task whose state changes stays where it is (ticked, struck through)
+// instead of dropping out because Done is hidden or the view asks for open
+// tasks. Only rows already on screen are kept; the next filter change lets
+// them go.
+void MainWindow::keepVisible(const std::vector<const Task *> &tasks)
+{
+    for (FlatTaskModel *m : {static_cast<FlatTaskModel *>(m_listModel), static_cast<FlatTaskModel *>(m_agendaModel),
+                             static_cast<FlatTaskModel *>(m_templateModel),
+                             static_cast<FlatTaskModel *>(m_sidebar->dayModel())}) {
+        std::vector<const Task *> shown;
+        for (const Task *t : tasks) {
+            if (m->indexOf(t).isValid())
+                shown.push_back(t);
+        }
+        m->keepVisible(shown);
+    }
 }
 
 void MainWindow::toggleDone()
@@ -1284,15 +1305,18 @@ void MainWindow::toggleTask(Task *task)
     const TaskState state = task->state == TaskState::Done ? TaskState::Todo : TaskState::Done;
     const QDate today = QDate::currentDate();
     std::vector<Edit> edits;
+    std::vector<const Task *> changed;
     std::function<void(Task *)> add = [&](Task *t) {
         if (t->state != state) {
             const QString raw = t->raw();
             edits.push_back({t->file->path, t->line, {raw}, {parser::setState(raw, state, today)}});
+            changed.push_back(t);
         }
         for (Task *c : t->children)
             add(c);
     };
     add(task);
+    keepVisible(changed);
     runEdits(edits, state == TaskState::Done ? tr("Mark done") : tr("Mark todo"));
 }
 

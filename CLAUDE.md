@@ -222,6 +222,12 @@ day in the sidebar read "174 days overdue".
   for that task and its subtasks. Parents and file headers show `done/total` in a small
   pill (green when complete). Header rows (files, agenda days) have a tinted band.
   Colours come from `TaskColors::fromPalette`, so they follow the theme.
+- A task whose state you change (checkbox, Space, X/P/T/C, in any list) stays where it is,
+  drawn in its new state, even when the state toggles or the view would now hide it, so
+  you can see what you've ticked off and untick it. `MainWindow::keepVisible` passes the rows
+  on screen to `FlatTaskModel::keepVisible` (held by `taskKey`, so it survives the store
+  change; the agenda also collects kept done tasks). `refilter()` (any filter, view or toggle
+  change) lets them go.
 - **Bulk actions always include subtasks** (the user asked for no toggle).
   Marking a parent done/cancelled/etc. applies to all descendants, as do due date,
   ETA, replace and delete. Toggle-done decides done vs todo from the selected rows only.

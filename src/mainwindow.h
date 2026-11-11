@@ -85,6 +85,7 @@ private:
 
     void setState(TaskState state);
     void toggleDone();
+    void keepVisible(const std::vector<const Task *> &tasks);
     void toggleTask(Task *task);
     void setDue();
     void clearDue();
